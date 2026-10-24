@@ -39,7 +39,7 @@ Reproduce: `cargo run -p zcrowd -- report --data fixtures/flows-sample.ndjson` a
 cargo run -p zcrowd -- check --unshield 1.0 --data fixtures/flows-sample.ndjson
 ```
 
-Real output:
+Real output (8 of the 10 match lines left out):
 
 ```
 note: values given as arguments are visible in shell history and the process list; use the flag without a value (or `-`) to type it privately
@@ -53,7 +53,7 @@ other pools: 0 entries of about this amount went into the other pools: linkable 
 matches (newest first, up to 10):
   2026-10-24 05:23 UTC  7.7 h ago  1.00000000 ZEC  4cfce7c4bc883107e979f069d213f2780a305b355a0ce9818bc1cef9403c9fd5
   2026-10-23 15:00 UTC  22.1 h ago  1.00000000 ZEC  74e2452adb96473fbf2014287b75eea2d19d32d6a0952b4ec78ded4658c93174
-  ... (8 more)
+  ...
 verdict: GREEN - big crowd for amount + timing only, not "private"
 funds in another pool? use --pool for a precise answer
 Not checked: address reuse. Never unshield to an address you shielded from (add --to -).

@@ -1,8 +1,9 @@
-//! Amount-and-timing crowd scoring (spec 41 A1-A5, B2).
+//! Amount-and-timing crowd scoring (spec 41 A1-A5, A11, B2).
 //!
-//! Adversary model: an observer matches an unshield to earlier shields by amount, allowing for the fee,
-//! and weighs recent matches more. This is a heuristic; it says nothing about graph, wallet or network leaks.
-use crate::model::{Confidence, Event, Kind, sig_decimals};
+//! Adversary model: an observer matches an unshield to earlier entries into the same shielded pool by amount,
+//! allowing for the fee, and weighs recent matches more. This is a heuristic; it says nothing about graph, wallet
+//! or network leaks, and a link through a visible move between pools is not counted.
+use crate::model::{Confidence, Event, Kind, Pool, sig_decimals};
 
 pub const DAY: u64 = 86_400;
 /// A "send max" round trip pays the fee out of the shielded note, so the recipient gets pool_in - fee.
@@ -39,6 +40,8 @@ impl std::fmt::Display for Verdict {
 
 #[derive(Clone, Debug)]
 pub struct Crowd {
+    /// The pool whose entries were counted.
+    pub pool: Pool,
     pub k: usize,
     pub weighted: f64,
     pub verdict: Verdict,
@@ -48,9 +51,12 @@ pub struct Crowd {
     pub matches: Vec<Event>,
 }
 
-fn in_scope(e: &Event, user: Kind, zat: u64, p: &Params) -> bool {
+/// An entry into `pool` (spec 41 A11): a High-confidence shield (a shielded coinbase included) or move whose pool is
+/// `pool`, inside the lookback window and the amount window. Low-confidence multi-pool events are never entries.
+pub(crate) fn in_scope(e: &Event, user: Kind, pool: Pool, zat: u64, p: &Params) -> bool {
     let (lo, hi) = bounds(user, zat, p);
-    e.kind == Kind::Shield
+    matches!(e.kind, Kind::Shield | Kind::Move)
+        && e.pool == pool
         && e.confidence == Confidence::High
         && e.t <= p.now
         && e.t >= p.now.saturating_sub(p.lookback_days * DAY)
@@ -65,11 +71,11 @@ pub fn bounds(user: Kind, zat: u64, p: &Params) -> (u64, u64) {
     (zat.saturating_sub(p.tol_zat), zat.saturating_add(allow).saturating_add(p.tol_zat))
 }
 
-/// (count, weighted count). Shields older than 14 days weigh 0.5.
-pub fn count(events: &[Event], user: Kind, zat: u64, p: &Params) -> (usize, f64) {
+/// (count, weighted count) of entries into `pool`. Entries older than 14 days weigh 0.5.
+pub fn count(events: &[Event], user: Kind, pool: Pool, zat: u64, p: &Params) -> (usize, f64) {
     events
         .iter()
-        .filter(|e| in_scope(e, user, zat, p))
+        .filter(|e| in_scope(e, user, pool, zat, p))
         .fold((0, 0.0), |(k, w), e| (k + 1, w + if p.now - e.t > 14 * DAY { 0.5 } else { 1.0 }))
 }
 
@@ -83,13 +89,38 @@ pub fn verdict_for(user: Kind, k: usize, weighted: f64) -> Verdict {
     }
 }
 
-/// `user` is what the user plans to do.
-pub fn score(events: &[Event], user: Kind, zat: u64, p: &Params) -> Crowd {
-    let (k, weighted) = count(events, user, zat, p);
-    let mut matches: Vec<Event> = events.iter().filter(|e| in_scope(e, user, zat, p)).cloned().collect();
+/// `user` is what the user plans to do; `pool` is where their funds are (unshield) or will arrive (shield).
+pub fn score(events: &[Event], user: Kind, pool: Pool, zat: u64, p: &Params) -> Crowd {
+    let (k, weighted) = count(events, user, pool, zat, p);
+    let mut matches: Vec<Event> = events.iter().filter(|e| in_scope(e, user, pool, zat, p)).cloned().collect();
     matches.sort_by(|a, b| b.t.cmp(&a.t).then_with(|| a.txid.cmp(&b.txid)));
     matches.truncate(10);
-    Crowd { k, weighted, verdict: verdict_for(user, k, weighted), odd_amount: sig_decimals(zat) >= 5, matches }
+    Crowd { pool, k, weighted, verdict: verdict_for(user, k, weighted), odd_amount: sig_decimals(zat) >= 5, matches }
+}
+
+/// One crowd per pool, in `Pool::SINGLE` order.
+pub fn score_pools(events: &[Event], user: Kind, zat: u64, p: &Params) -> [Crowd; 3] {
+    Pool::SINGLE.map(|pool| score(events, user, pool, zat, p))
+}
+
+/// The worse of two verdicts: RED > AMBER > GREEN > NO MATCH.
+pub fn worse(a: Verdict, b: Verdict) -> Verdict {
+    let rank = |v| match v {
+        Verdict::NoMatch => 0,
+        Verdict::Green => 1,
+        Verdict::Amber => 2,
+        Verdict::Red => 3,
+    };
+    if rank(b) > rank(a) { b } else { a }
+}
+
+/// The pool with the worst verdict (spec 41 A11, `--pool any`). A tie goes to the smaller weighted crowd, then to the
+/// pool listed first in `Pool::SINGLE`. web/index.template.html does the same.
+pub fn worst(crowds: &[Crowd; 3]) -> &Crowd {
+    crowds.iter().skip(1).fold(&crowds[0], |a, b| {
+        let b_is_worse = worse(a.verdict, b.verdict) != a.verdict || (a.verdict == b.verdict && b.weighted < a.weighted);
+        if b_is_worse { b } else { a }
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +155,15 @@ pub fn address_check(events: &[Event], addr: &str, now: u64) -> AddrFinding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Pool, ZAT_PER_ZEC};
+    use crate::model::ZAT_PER_ZEC;
+
+    // E1-E8 are about one pool (Sapling, which `ev` makes); E11-E15 below are about several and call `super::`.
+    fn score(events: &[Event], user: Kind, zat: u64, p: &Params) -> Crowd {
+        super::score(events, user, Pool::Sapling, zat, p)
+    }
+    fn count(events: &[Event], user: Kind, zat: u64, p: &Params) -> (usize, f64) {
+        super::count(events, user, Pool::Sapling, zat, p)
+    }
 
     fn ev(kind: Kind, zat: u64, t: u64) -> Event {
         Event {
@@ -244,5 +283,92 @@ mod tests {
         assert!(c.odd_amount && c.verdict == Verdict::Green);
         let none = score(&[], Kind::Unshield, z, &p(0));
         assert!(none.odd_amount && none.verdict == Verdict::NoMatch);
+    }
+
+    fn ev_in(kind: Kind, pool: Pool, zat: u64, t: u64) -> Event {
+        Event { pool, ..ev(kind, zat, t) }
+    }
+    fn by_pool(evs: &[Event], user: Kind, zat: u64) -> Vec<(Pool, usize, Verdict)> {
+        score_pools(evs, user, zat, &p(0)).iter().map(|c| (c.pool, c.k, c.verdict)).collect()
+    }
+
+    // E11: a shield whose only shielded part is Ironwood is an entry into Ironwood (it was invisible before A11).
+    #[test]
+    fn e11_ironwood_only_shield_is_counted() {
+        let evs = vec![ev_in(Kind::Shield, Pool::Ironwood, X + 15_000, NOW - 3600)];
+        let c = super::score(&evs, Kind::Unshield, Pool::Ironwood, X, &p(0));
+        assert_eq!((c.pool, c.k, c.verdict), (Pool::Ironwood, 1, Verdict::Red));
+        assert_eq!(super::score(&evs, Kind::Shield, Pool::Ironwood, X + 15_000, &p(0)).k, 1);
+    }
+
+    // E12: a Sapling shield of X is no decoy for an Ironwood unshield of X, and `any` is the worst pool.
+    #[test]
+    fn e12_other_pools_are_not_counted_and_any_is_the_worst_pool() {
+        let sapling = shields(X, 1);
+        assert_eq!(super::score(&sapling, Kind::Unshield, Pool::Ironwood, X, &p(0)).verdict, Verdict::NoMatch);
+        assert_eq!(super::score(&sapling, Kind::Shield, Pool::Ironwood, X, &p(0)).verdict, Verdict::Red);
+        let mut evs = sapling;
+        evs.extend((0..12).map(|i| ev_in(Kind::Shield, Pool::Ironwood, X, NOW - 100 - i)));
+        evs.extend((0..2).map(|i| ev_in(Kind::Shield, Pool::Orchard, X, NOW - 200 - i)));
+        let all = by_pool(&evs, Kind::Unshield, X);
+        assert_eq!(
+            all,
+            [(Pool::Sapling, 1, Verdict::Red), (Pool::Orchard, 2, Verdict::Amber), (Pool::Ironwood, 12, Verdict::Green)]
+        );
+        assert_eq!(worst(&score_pools(&evs, Kind::Unshield, X, &p(0))).pool, Pool::Sapling);
+        // the same crowd without the lone Sapling shield: AMBER (Orchard) is the worst of AMBER, GREEN, NO MATCH
+        assert_eq!(worst(&score_pools(&evs[1..], Kind::Unshield, X, &p(0))).pool, Pool::Orchard);
+    }
+
+    #[test]
+    fn worst_pool_order_and_ties() {
+        let crowd = |pool, k: usize, weighted: f64, verdict| Crowd { pool, k, weighted, verdict, odd_amount: false, matches: vec![] };
+        let (s, o, i) = (Pool::Sapling, Pool::Orchard, Pool::Ironwood);
+        // GREEN is worse than NO MATCH
+        assert_eq!(worst(&[crowd(s, 0, 0.0, Verdict::NoMatch), crowd(o, 20, 20.0, Verdict::Green), crowd(i, 0, 0.0, Verdict::NoMatch)]).pool, o);
+        // equal verdicts: the smaller weighted crowd, then the first pool
+        assert_eq!(worst(&[crowd(s, 5, 5.0, Verdict::Amber), crowd(o, 4, 2.0, Verdict::Amber), crowd(i, 4, 2.0, Verdict::Amber)]).pool, o);
+        assert_eq!(worst(&[crowd(s, 0, 0.0, Verdict::NoMatch), crowd(o, 0, 0.0, Verdict::NoMatch), crowd(i, 0, 0.0, Verdict::NoMatch)]).pool, s);
+        assert_eq!(worst(&[crowd(s, 1, 1.0, Verdict::Red), crowd(o, 1, 0.5, Verdict::Red), crowd(i, 1, 1.0, Verdict::Red)]).pool, o);
+    }
+
+    // E13: value that moved into Ironwood from another pool can be what an Ironwood unshield spends.
+    #[test]
+    fn e13_a_move_into_ironwood_is_a_candidate_for_an_ironwood_unshield() {
+        let mv = ev_in(Kind::Move, Pool::Ironwood, X + 15_000, NOW - 60);
+        let at = |pool, user| super::score(&[mv.clone()], user, pool, X, &p(0)).k;
+        assert_eq!((at(Pool::Ironwood, Kind::Unshield), at(Pool::Orchard, Kind::Unshield), at(Pool::Sapling, Kind::Unshield)), (1, 0, 0));
+        // a move is also a decoy for someone who is about to shield the same amount into that pool
+        assert_eq!(super::score(&[mv], Kind::Shield, Pool::Ironwood, X + 15_000, &p(0)).k, 1);
+    }
+
+    // E15: a shielded coinbase is an entry like any other shield.
+    #[test]
+    fn e15_a_shielded_coinbase_is_an_entry() {
+        let mut cb = ev_in(Kind::Shield, Pool::Ironwood, X + 15_000, NOW - 60);
+        cb.coinbase = true;
+        let c = super::score(&[cb], Kind::Unshield, Pool::Ironwood, X, &p(0));
+        assert_eq!((c.k, c.matches.len(), c.matches[0].coinbase), (1, 1, true));
+    }
+
+    #[test]
+    fn low_confidence_multi_pool_events_are_no_entries_but_their_addresses_count() {
+        let mut shield = ev_in(Kind::Shield, Pool::Mixed, X, NOW - 100);
+        shield.confidence = Confidence::Low;
+        shield.src = vec!["t1src".into()];
+        let mut unshield = ev_in(Kind::Unshield, Pool::Mixed, X, NOW - 50);
+        unshield.confidence = Confidence::Low;
+        unshield.dst = vec!["t1dst".into()];
+        let evs = vec![shield, unshield];
+        assert!(by_pool(&evs, Kind::Unshield, X).iter().all(|c| c.1 == 0));
+        assert!(by_pool(&evs, Kind::Shield, X).iter().all(|c| c.1 == 0));
+        assert!(matches!(address_check(&evs, "t1src", NOW), AddrFinding::ShieldSource { .. }));
+        assert!(matches!(address_check(&evs, "t1dst", NOW), AddrFinding::UsedAsDestination { n: 1, .. }));
+    }
+
+    #[test]
+    fn shield_mode_counts_entries_into_the_chosen_pool_only() {
+        let evs: Vec<_> = (0..12).map(|i| ev_in(Kind::Shield, Pool::Orchard, X, NOW - 10 - i)).collect();
+        assert_eq!(by_pool(&evs, Kind::Shield, X), [(Pool::Sapling, 0, Verdict::Red), (Pool::Orchard, 12, Verdict::Green), (Pool::Ironwood, 0, Verdict::Red)]);
     }
 }

@@ -56,9 +56,13 @@ enum Cmd {
         /// privately: no echo on a terminal, one line on stdin.
         #[arg(long, num_args = 0..=1, conflicts_with = "shield")]
         unshield: Option<Option<String>>,
-        /// Planned shield amount in ZEC: how many other shields of about this amount exist.
+        /// Planned shield amount in ZEC, the amount that arrives in the shielded pool (what you shield minus the fee):
+        /// how many other shields of about this amount exist.
         #[arg(long, num_args = 0..=1)]
         shield: Option<Option<String>>,
+        /// Shielded pool your funds are in (or will arrive in). `any` scores all three and shows the worst.
+        #[arg(long, value_enum, default_value_t = check::PoolArg::Any)]
+        pool: check::PoolArg,
         /// Transparent address you plan to unshield to (t1, t3 or tex1), or `-` to type it privately.
         #[arg(long)]
         to: Option<String>,
@@ -144,9 +148,9 @@ fn main() -> Result<()> {
                 sync::run(open_source(server, no_tor, tor_dir).await?, days, &out, candidates_only, concurrency, end_height).await
             })
         }
-        Cmd::Check { unshield, shield, to, lookback_days, tolerance_zat, fee_allowance_zat, data, json } => {
+        Cmd::Check { unshield, shield, pool, to, lookback_days, tolerance_zat, fee_allowance_zat, data, json } => {
             sandbox::enter();
-            check::run(check::Args { unshield, shield, to, lookback_days, tol_zat: tolerance_zat, fee_allowance_zat, data, json })
+            check::run(check::Args { unshield, shield, pool, to, lookback_days, tol_zat: tolerance_zat, fee_allowance_zat, data, json })
         }
         Cmd::Report { out, data } => {
             sandbox::enter();

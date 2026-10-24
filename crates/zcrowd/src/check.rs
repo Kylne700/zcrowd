@@ -3,14 +3,36 @@ use serde_json::json;
 use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
 use zcrowd_core::Kind;
-use zcrowd_core::crowd::{AddrFinding, DAY, Params, Verdict, address_check, score};
+use zcrowd_core::crowd::{AddrFinding, Crowd, DAY, Params, Verdict, address_check, score_pools, worse, worst};
 use zcrowd_core::decode::canonical_taddr;
 use zcrowd_core::model::{Event, coinbase_tag, coverage_of, fmt_utc, fmt_zec, parse_zec, read_ndjson};
 use zcrowd_core::suggest::popular;
 
+/// Which shielded pool the funds are in (unshield) or will arrive in (shield). `any` scores all three and shows the worst.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum PoolArg {
+    Any,
+    Sapling,
+    Orchard,
+    Ironwood,
+}
+
+impl PoolArg {
+    /// The crowd to show out of `score_pools`, which lists the pools in `Pool::SINGLE` order.
+    fn pick(self, crowds: &[Crowd; 3]) -> &Crowd {
+        match self {
+            PoolArg::Any => worst(crowds),
+            PoolArg::Sapling => &crowds[0],
+            PoolArg::Orchard => &crowds[1],
+            PoolArg::Ironwood => &crowds[2],
+        }
+    }
+}
+
 pub struct Args {
     pub unshield: Option<Option<String>>,
     pub shield: Option<Option<String>>,
+    pub pool: PoolArg,
     pub to: Option<String>,
     pub lookback_days: u64,
     pub tol_zat: u64,
@@ -42,7 +64,7 @@ fn take(v: Option<String>, prompt: &str) -> Result<String> {
     }
 }
 
-const FOOTER: &str = "Covers amount + timing (+ address reuse with --to). Not covered: wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), z->z graph, cross-pool (Sapling<->Orchard) moves, off-chain records.";
+const FOOTER: &str = "Covers amount + timing within one pool (+ address reuse with --to). Not covered: wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), the z->z graph, links through pool moves beyond their amounts, off-chain records.";
 
 pub fn run(a: Args) -> Result<()> {
     let (user, val) = match (a.unshield, a.shield) {
@@ -53,7 +75,11 @@ pub fn run(a: Args) -> Result<()> {
     if a.to.is_some() && user == Kind::Shield {
         bail!("--to applies to --unshield (the address you plan to unshield to)");
     }
-    let zat = parse_zec(&take(val, "Amount in ZEC (not shown): ")?)?;
+    let prompt = match user {
+        Kind::Shield => "Amount that arrives in the pool in ZEC, what you shield minus the fee (not shown): ",
+        _ => "Amount in ZEC (not shown): ",
+    };
+    let zat = parse_zec(&take(val, prompt)?)?;
     let to = match a.to {
         Some(t) => Some(canonical_taddr(&take(Some(t).filter(|t| t != "-"), "Destination address (not shown): ")?)?),
         None => None,
@@ -66,16 +92,21 @@ pub fn run(a: Args) -> Result<()> {
     let (cov, cov_derived) = coverage_of(&a.data, &events).expect("events is non-empty");
     let now = cov.last_t;
     let p = Params { lookback_days: a.lookback_days, tol_zat: a.tol_zat, fee_allowance_zat: a.fee_allowance_zat, now };
-    let c = score(&events, user, zat, &p);
-    let sugg = if matches!(c.verdict, Verdict::Green) { vec![] } else { popular(&events, user, zat, &p, 5) };
+    let crowds = score_pools(&events, user, zat, &p);
+    let c = a.pool.pick(&crowds);
+    let sugg = if matches!(c.verdict, Verdict::Green) { vec![] } else { popular(&events, user, c.pool, zat, &p, 5) };
     let addr = to.as_deref().map(|t| address_check(&events, t, now));
     let overall = addr.as_ref().map_or(c.verdict, |f| worse(c.verdict, addr_verdict(f)));
+    // entries into the other pools: an observer reaches them only through a visible move between pools
+    let elsewhere: usize = crowds.iter().filter(|o| o.pool != c.pool).map(|o| o.k).sum();
 
     if a.json {
         let v = |x: Verdict| x.to_string();
         // `verdict` is the overall one, exactly as in the text output (the worse of amount and address)
         let out = json!({
-            "k": c.k, "weighted": c.weighted, "verdict": v(overall), "odd_amount": c.odd_amount,
+            "pool": c.pool.name(), "k": c.k, "weighted": c.weighted, "verdict": v(overall), "odd_amount": c.odd_amount,
+            "pools": crowds.iter().map(|o| json!({"pool": o.pool.name(), "k": o.k, "weighted": o.weighted, "verdict": v(o.verdict)})).collect::<Vec<_>>(),
+            "other_pools_k": elsewhere,
             "amount_verdict": v(c.verdict), "address_verdict": addr.as_ref().map(|f| v(addr_verdict(f))),
             "matches": c.matches.iter().map(|e| &e.txid).collect::<Vec<_>>(),
             "suggestions": sugg.iter().map(|s| json!({"zat": s.zat, "k": s.k, "weighted": s.weighted, "verdict": v(s.verdict)})).collect::<Vec<_>>(),
@@ -84,13 +115,15 @@ pub fn run(a: Args) -> Result<()> {
         return Ok(());
     }
 
-    let (what, other) = match user {
-        Kind::Unshield => ("unshield (recipient gets this amount)", "earlier shields of about this amount, allowing for the fee"),
-        Kind::Shield | Kind::Move => ("shield", "other shields of about this amount, the decoys for a later unshield of the whole note"),
+    let (what, other) = if user == Kind::Unshield {
+        ("unshield (recipient gets this amount)", "earlier shields and moves into it of about this amount, allowing for the fee")
+    } else {
+        ("shield (amount arriving in the pool)", "other shields and moves into it of about this amount, the decoys for a later unshield of the whole note")
     };
     println!(
-        "check: {what} {} ZEC; fee allowance {} zat, tolerance {} zat, lookback {} days",
+        "check: {what} {} ZEC; pool {}; fee allowance {} zat, tolerance {} zat, lookback {} days",
         fmt_zec(zat),
+        if a.pool == PoolArg::Any { "any (worst of sapling, orchard, ironwood)" } else { c.pool.name() },
         if user == Kind::Unshield { a.fee_allowance_zat } else { 0 },
         a.tol_zat,
         a.lookback_days
@@ -120,8 +153,20 @@ pub fn run(a: Args) -> Result<()> {
             fmt_utc(cov.first_t)
         );
     }
+    if a.pool == PoolArg::Any {
+        for o in &crowds {
+            println!("pool {}: k={} weighted={:.1} -> {}", o.pool.name(), o.k, o.weighted, o.verdict);
+        }
+    }
     // stable line (spec 41 A10): `crowd: k=<n> weighted=<w>`, explanation after it
-    println!("crowd: k={} weighted={:.1} ({other}; shields older than 14 days count half)", c.k, c.weighted);
+    println!(
+        "crowd: k={} weighted={:.1} (pool {}{}: {other}; entries older than 14 days count half)",
+        c.k,
+        c.weighted,
+        c.pool.name(),
+        if a.pool == PoolArg::Any { ", the worst of the three" } else { "" }
+    );
+    println!("other pools: {elsewhere} entries of about this amount went into the other pools: linkable only through a visible pool move; not counted");
     if !c.matches.is_empty() {
         println!("matches (newest first, up to 10):");
         for e in &c.matches {
@@ -145,6 +190,9 @@ pub fn run(a: Args) -> Result<()> {
             println!("verdict: {overall} (worst of amount {} and address {})", c.verdict, addr_verdict(f));
             println!("amount: {} - {why}", c.verdict);
         }
+    }
+    if a.pool == PoolArg::Any {
+        println!("funds in another pool? use --pool for a precise answer");
     }
     if c.odd_amount {
         println!("note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
@@ -196,14 +244,4 @@ fn addr_verdict(f: &AddrFinding) -> Verdict {
         AddrFinding::UsedAsDestination { .. } => Verdict::Amber,
         AddrFinding::ShieldSource { .. } => Verdict::Red,
     }
-}
-
-fn worse(a: Verdict, b: Verdict) -> Verdict {
-    let rank = |v| match v {
-        Verdict::NoMatch => 0,
-        Verdict::Green => 1,
-        Verdict::Amber => 2,
-        Verdict::Red => 3,
-    };
-    if rank(b) > rank(a) { b } else { a }
 }

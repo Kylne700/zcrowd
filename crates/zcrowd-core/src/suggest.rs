@@ -1,5 +1,5 @@
-use crate::crowd::{Params, Verdict, count, verdict_for};
-use crate::model::{Confidence, Event, Kind};
+use crate::crowd::{Params, Verdict, count, in_scope, verdict_for};
+use crate::model::{Event, Kind, Pool};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
@@ -13,21 +13,21 @@ pub struct Suggestion {
 /// Up to `n` amounts within +-10% of `zat` that have a bigger crowd than `zat` itself (and more than one
 /// match), biggest first; ties: closer to `zat`, then smaller amount. Scored with exactly the same
 /// window and weights as `crowd::score`, so a suggestion never promises more than the check shows.
-pub fn popular(events: &[Event], user: Kind, zat: u64, p: &Params, n: usize) -> Vec<Suggestion> {
+pub fn popular(events: &[Event], user: Kind, pool: Pool, zat: u64, p: &Params, n: usize) -> Vec<Suggestion> {
     let (lo, hi) = (zat - zat / 10, zat + zat / 10);
-    let base = count(events, user, zat, p).1.max(1.0);
-    // Candidates are amounts that shields actually used inside the lookback window.
-    let from = p.now.saturating_sub(p.lookback_days * crate::crowd::DAY);
+    let base = count(events, user, pool, zat, p).1.max(1.0);
+    // Candidates are amounts that entries into `pool` actually used inside the lookback window. Asking `in_scope` for
+    // the entry's own amount keeps this list and the count below on one definition of "entry".
     let cands: BTreeSet<u64> = events
         .iter()
-        .filter(|e| e.kind == Kind::Shield && e.confidence == Confidence::High && e.t <= p.now && e.t >= from)
+        .filter(|e| in_scope(e, user, pool, e.zat, &Params { tol_zat: 0, fee_allowance_zat: 0, ..*p }))
         .map(|e| e.zat)
         .filter(|z| (lo..=hi).contains(z) && *z != zat)
         .collect();
     let mut out: Vec<Suggestion> = cands
         .into_iter()
         .map(|a| {
-            let (k, weighted) = count(events, user, a, p);
+            let (k, weighted) = count(events, user, pool, a, p);
             Suggestion { zat: a, k, weighted, verdict: verdict_for(user, k, weighted) }
         })
         .filter(|s| s.weighted > base)
@@ -41,7 +41,7 @@ pub fn popular(events: &[Event], user: Kind, zat: u64, p: &Params, n: usize) -> 
 mod tests {
     use super::*;
     use crate::crowd::DEFAULT_FEE_ALLOWANCE;
-    use crate::model::{Pool, ZAT_PER_ZEC};
+    use crate::model::{Confidence, ZAT_PER_ZEC};
 
     fn sh(zat: u64, i: u64) -> Event {
         Event {
@@ -68,8 +68,8 @@ mod tests {
         for user in [Kind::Unshield, Kind::Shield] {
             let p = Params { lookback_days: 30, tol_zat: 0, fee_allowance_zat: DEFAULT_FEE_ALLOWANCE, now: 5000 };
             let x = ZAT_PER_ZEC * 102 / 100;
-            let base = count(&evs, user, x, &p).1;
-            let s = popular(&evs, user, x, &p, 5);
+            let base = count(&evs, user, Pool::Orchard, x, &p).1;
+            let s = popular(&evs, user, Pool::Orchard, x, &p, 5);
             assert!(!s.is_empty() && s.iter().all(|c| c.weighted >= base));
             assert_eq!(s[0].zat, ZAT_PER_ZEC);
             assert!(s.windows(2).all(|w| w[0].weighted >= w[1].weighted));

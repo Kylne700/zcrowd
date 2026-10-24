@@ -4,12 +4,17 @@ use std::process::{Command, Stdio};
 const BIN: &str = env!("CARGO_BIN_EXE_zcrowd");
 const T: u64 = 1_790_000_000;
 
-fn line(kind: &str, zat: u64, i: u64, extra: &str) -> String {
+fn line_in(kind: &str, pool: &str, zat: u64, i: u64, extra: &str) -> String {
+    let n_tin = u8::from(kind != "move"); // a move has no transparent input
     format!(
-        r#"{{"h":{},"t":{},"kind":"{kind}","zat":{zat},"pool":"sapling","fee_zat":null,"n_tin":1,"n_tout":0,"txid":"{i:064x}","confidence":"high"{extra}}}"#,
+        r#"{{"h":{},"t":{},"kind":"{kind}","zat":{zat},"pool":"{pool}","fee_zat":null,"n_tin":{n_tin},"n_tout":0,"txid":"{i:064x}","confidence":"high"{extra}}}"#,
         3_500_000 + i,
         T - 100 * i
     )
+}
+
+fn line(kind: &str, zat: u64, i: u64, extra: &str) -> String {
+    line_in(kind, "sapling", zat, i, extra)
 }
 
 fn data_file(name: &str, lines: &[String]) -> std::path::PathBuf {
@@ -82,23 +87,81 @@ fn cli_check_shield_mode_and_address_reuse() {
     v.push(line("shield", 500_000_000, 20, &src));
     let d = data_file("cli-c.ndjson", &v);
     let f = d.to_str().unwrap();
-    let (_, out, _) = run(&["check", "--shield", "-", "--data", f], Some("1\n"));
+    let (_, out, _) = run(&["check", "--shield", "-", "--pool", "sapling", "--data", f], Some("1\n"));
     contract(&out);
     assert!(out.contains("verdict: GREEN"), "{out}");
-    let (ok, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--data", f], Some(&format!("1\n{a}\n")));
+    // without --pool the worst of the three pools counts: nothing entered Orchard or Ironwood, so the whole note would be unique there
+    let (_, out, _) = run(&["check", "--shield", "-", "--data", f], Some("1\n"));
+    contract(&out);
+    assert!(out.contains("verdict: RED") && out.contains("pool orchard: k=0 weighted=0.0 -> RED"), "{out}");
+    let (ok, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--pool", "sapling", "--data", f], Some(&format!("1\n{a}\n")));
     contract(&out);
     assert!(ok && out.contains("verdict: RED") && out.contains("address: RED") && out.contains("shielded on"), "{out}");
     // --json carries the same overall verdict (not the amount's GREEN), plus the two parts; no typed value in it
-    let (ok, js, _) = run(&["check", "--unshield", "-", "--to", "-", "--json", "--data", f], Some(&format!("1\n{a}\n")));
+    let (ok, js, _) = run(&["check", "--unshield", "-", "--to", "-", "--pool", "sapling", "--json", "--data", f], Some(&format!("1\n{a}\n")));
     assert!(ok && js.contains(r#""verdict":"RED""#), "{js}");
     assert!(js.contains(r#""amount_verdict":"GREEN""#) && js.contains(r#""address_verdict":"RED""#), "{js}");
     assert!(!js.contains(a), "{js}");
-    let (_, js, _) = run(&["check", "--unshield", "-", "--json", "--data", f], Some("1\n"));
+    let (_, js, _) = run(&["check", "--unshield", "-", "--pool", "sapling", "--json", "--data", f], Some("1\n"));
     assert!(js.contains(r#""verdict":"GREEN""#) && js.contains(r#""address_verdict":null"#), "{js}");
     // the address never appears in the data file or anywhere else we wrote
     assert!(!std::fs::read_to_string(&d).unwrap().contains("t1Zzz"));
     let (_, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--data", f], Some("1\nt1Zzz...bad\n"));
     assert!(out.is_empty());
+}
+
+// Spec 41 A11: a crowd is the entries into ONE pool; `--pool any` (the default) shows every pool and the worst verdict.
+#[test]
+fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
+    // 1.00015 ZEC entered Sapling once, Orchard 3 times, Ironwood 12 times (4 of them as moves from another pool)
+    let mut v = vec![line_in("shield", "sapling", 100_015_000, 1, "")];
+    v.extend((2..=4).map(|i| line_in("shield", "orchard", 100_015_000, i, "")));
+    v.extend((5..=12).map(|i| line_in("shield", "ironwood", 100_015_000, i, "")));
+    v.extend((13..=16).map(|i| line_in("move", "ironwood", 100_015_000, i, "")));
+    // a low-confidence multi-pool event and an unshield are no entries into any pool
+    v.push(line_in("shield", "mixed", 100_015_000, 17, "").replace(r#""confidence":"high""#, r#""confidence":"low""#));
+    v.push(line_in("unshield", "ironwood", 100_015_000, 18, ""));
+    let d = data_file("cli-pools.ndjson", &v);
+    let f = d.to_str().unwrap();
+    let json = |pool: &str| -> serde_json::Value {
+        let (ok, out, err) = run(&["check", "--unshield", "-", "--pool", pool, "--json", "--data", f], Some("1.0\n"));
+        assert!(ok, "{err}");
+        serde_json::from_str(&out).unwrap()
+    };
+    for (pool, k, verdict, elsewhere) in [("sapling", 1, "RED", 15), ("orchard", 3, "AMBER", 13), ("ironwood", 12, "GREEN", 4)] {
+        let j = json(pool);
+        assert_eq!((j["pool"].as_str(), j["k"].as_u64(), j["verdict"].as_str(), j["other_pools_k"].as_u64()), (Some(pool), Some(k), Some(verdict), Some(elsewhere)), "{j}");
+        assert_eq!(j["pools"].as_array().unwrap().len(), 3, "{j}");
+    }
+    let j = json("any");
+    assert_eq!((j["pool"].as_str(), j["k"].as_u64(), j["verdict"].as_str()), (Some("sapling"), Some(1), Some("RED")), "{j}");
+    // text: one line per pool, one verdict and one crowd line (the worst pool), the hint, and the other pools' entries
+    let (ok, out, _) = run(&["check", "--unshield", "-", "--data", f], Some("1.0\n"));
+    assert!(ok);
+    contract(&out);
+    for l in [
+        "pool sapling: k=1 weighted=1.0 -> RED",
+        "pool orchard: k=3 weighted=3.0 -> AMBER",
+        "pool ironwood: k=12 weighted=12.0 -> GREEN",
+        "verdict: RED",
+        "funds in another pool? use --pool for a precise answer",
+        "other pools: 15 entries",
+        "linkable only through a visible pool move; not counted",
+    ] {
+        assert!(out.contains(l), "{l}\n{out}");
+    }
+    let (ok, out, _) = run(&["check", "--unshield", "-", "--pool", "ironwood", "--data", f], Some("1.0\n"));
+    assert!(ok);
+    contract(&out);
+    assert!(out.contains("verdict: GREEN") && out.contains("crowd: k=12 weighted=12.0 ") && out.contains("other pools: 4 entries"), "{out}");
+    assert!(!out.contains("funds in another pool?") && !out.contains("pool sapling:"), "{out}");
+    // --shield: the amount that arrives in the pool, counted against entries into that pool
+    let (ok, out, _) = run(&["check", "--shield", "-", "--pool", "orchard", "--data", f], Some("1.00015\n"));
+    assert!(ok);
+    contract(&out);
+    assert!(out.contains("verdict: AMBER") && out.contains("crowd: k=3 "), "{out}");
+    let (ok, _, err) = run(&["check", "--unshield", "-", "--pool", "bitcoin", "--data", f], Some("1.0\n"));
+    assert!(!ok && err.contains("--pool"), "{err}");
 }
 
 // Spec 41 C3: the process cuts its own network. A listener on loopback is reachable from this process

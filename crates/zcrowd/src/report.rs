@@ -25,7 +25,8 @@ pub fn run(out: &Path, data: &Path) -> Result<()> {
     Ok(())
 }
 
-/// How the unshields of the last 14 days looked to an observer: each scored against the 14 days of shields before it.
+/// How the unshields of the last 14 days looked to an observer: each scored against the 14 days of entries (shields and
+/// moves) into its own pool before it.
 /// Counts in the order NO MATCH, RED, AMBER, GREEN.
 fn profile(evs: &[Event], last_t: u64) -> [usize; 4] {
     let mut n = [0; 4];
@@ -33,7 +34,7 @@ fn profile(evs: &[Event], last_t: u64) -> [usize; 4] {
         let p = Params { lookback_days: 14, tol_zat: 0, fee_allowance_zat: DEFAULT_FEE_ALLOWANCE, now: e.t };
         // the recipient gets the pool amount minus the fee (the fee is unknown for a few: their pool amount is used)
         let x = e.zat.saturating_sub(e.fee_zat.unwrap_or(0)).max(1);
-        n[match score(evs, Kind::Unshield, x, &p).verdict {
+        n[match score(evs, Kind::Unshield, e.pool, x, &p).verdict {
             Verdict::NoMatch => 0,
             Verdict::Red => 1,
             Verdict::Amber => 2,
@@ -47,19 +48,17 @@ pub fn render(evs: &[Event], cov: Option<Coverage>) -> String {
     let window = cov.map_or(String::new(), |c| {
         format!(" Window: blocks {}-{} ({} to {}).", c.first_h, c.last_h, fmt_utc(c.first_t), fmt_utc(c.last_t))
     });
+    // moves between shielded pools are neither shields nor unshields: counted in the headline, not in the tables
+    let flows: Vec<&Event> = evs.iter().filter(|e| e.kind != Kind::Move).collect();
     let mut by_amt: HashMap<u64, (usize, usize)> = HashMap::new();
-    for e in evs {
+    for e in &flows {
         let c = by_amt.entry(e.zat).or_default();
         if e.kind == Kind::Shield { c.0 += 1 } else { c.1 += 1 }
     }
     let n = |k| evs.iter().filter(|e| e.kind == k).count();
-    let unique = evs.iter().filter(|e| {
-        let c = by_amt[&e.zat];
-        c.0 + c.1 == 1
-    });
-    let uniq = unique.count();
+    let uniq = flows.iter().filter(|e| by_amt[&e.zat] == (1, 0) || by_amt[&e.zat] == (0, 1)).count();
     let mut hist = vec![(0usize, 0usize); BUCKETS.len()];
-    for e in evs {
+    for e in &flows {
         let i = BUCKETS.iter().position(|b| e.zat >= b.1 && e.zat < b.2).unwrap_or(0);
         if e.kind == Kind::Shield { hist[i].0 += 1 } else { hist[i].1 += 1 }
     }
@@ -109,10 +108,10 @@ pub fn render(evs: &[Event], cov: Option<Coverage>) -> String {
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>zcrowd report</title>\
 <style>body{{font:15px/1.5 sans-serif;max-width:640px;margin:2em auto;padding:0 1em}}td,th{{padding:2px 12px;text-align:right}}</style></head><body>\
 <h1>zcrowd report</h1>\
-<p>{} events from public chain data: {} shields (t to z), {} unshields (z to t).{window} Ambiguous cross-pool transactions excluded.</p>\
+<p>{} events from public chain data: {} shields (t to z), {} unshields (z to t), {} moves between shielded pools.{window} Low-confidence multi-pool transactions excluded.</p>\
 <p><b>{uniq}</b> events ({:.1}%) have an amount that no other event shares: these are the easiest to link.</p>\
 <h2>Unshields of the last 14 days as an observer would score them</h2>\
-<p>Each unshield (amount the recipient got) against the shields of the 14 days before it, fee allowance 50000 zat. RED: exactly one earlier shield of about that amount, so an observer has one candidate. GREEN: ten or more.</p>{short}\
+<p>Each unshield (amount the recipient got) against the shields and moves into its own pool in the 14 days before it, fee allowance 50000 zat. RED: exactly one earlier entry of about that amount, so an observer has one candidate. GREEN: ten or more.</p>{short}\
 <table><tr><th>verdict</th><th>unshields</th><th>share</th></tr>{prof_rows}</table>\
 <h2>Events by amount</h2>{svg}\
 <h2>Most common exact amounts</h2><table><tr><th>ZEC</th><th>shields</th><th>unshields</th></tr>{rows}</table>\
@@ -120,6 +119,7 @@ pub fn render(evs: &[Event], cov: Option<Coverage>) -> String {
         evs.len(),
         n(Kind::Shield),
         n(Kind::Unshield),
-        100.0 * uniq as f64 / evs.len().max(1) as f64
+        n(Kind::Move),
+        100.0 * uniq as f64 / flows.len().max(1) as f64
     )
 }

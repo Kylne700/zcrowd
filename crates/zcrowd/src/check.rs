@@ -43,7 +43,7 @@ pub struct Args {
 }
 
 /// A value that should not sit in shell history: read from the terminal without echo, or one line of stdin.
-fn secret_line(prompt: &str) -> Result<String> {
+pub(crate) fn secret_line(prompt: &str) -> Result<String> {
     if std::io::stdin().is_terminal() {
         return Ok(rpassword::prompt_password(prompt)?);
     }

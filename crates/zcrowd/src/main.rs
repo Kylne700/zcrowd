@@ -93,6 +93,7 @@ enum Cmd {
     },
     /// Recompute one event from the raw transaction cached by `sync` (offline).
     Verify {
+        /// Transaction id of an event in the data, or `-` to type it privately (no echo on a terminal, else one line of stdin).
         txid: String,
         #[arg(long, default_value = "data/flows.ndjson")]
         data: PathBuf,

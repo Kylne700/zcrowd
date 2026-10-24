@@ -137,10 +137,11 @@ fn cli_check_shield_mode_and_address_reuse() {
     assert!(!js.contains(a), "{js}");
     let (_, js, _) = run(&["check", "--unshield", "-", "--pool", "sapling", "--json", "--data", f], Some("1\n"));
     assert!(js.contains(r#""verdict":"GREEN""#) && js.contains(r#""address_verdict":null"#), "{js}");
-    // the address never appears in the data file or anywhere else we wrote
-    assert!(!std::fs::read_to_string(&d).unwrap().contains("t1Zzz"));
-    let (_, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--data", f], Some("1\nt1Zzz...bad\n"));
-    assert!(out.is_empty());
+    // a malformed address is refused without being printed back, and `check` writes nothing anywhere
+    let before = std::fs::read(&d).unwrap();
+    let (ok, out, err) = run(&["check", "--unshield", "-", "--to", "-", "--data", f], Some("1\nt1Zzz...bad\n"));
+    assert!(!ok && out.is_empty() && err.contains("not a Zcash address") && !err.contains("t1Zzz"), "{out}{err}");
+    assert_eq!(std::fs::read(&d).unwrap(), before);
 }
 
 /// A mainnet Unified Address with these receivers, as a string.
@@ -274,6 +275,90 @@ fn sandbox_blocks_connections() {
     assert_eq!(plain.trim(), "connected");
     let (_, boxed, err) = run(&["sandbox-probe", &addr, "--sandbox"], None);
     assert!(boxed.starts_with("blocked"), "{boxed} {err}");
+}
+
+/// The files `check`, `report` and `verify` must not be able to see over a network: they stop at a data file that is a FIFO
+/// nobody writes to, so what is left to look at is the namespace the process is in by then.
+#[cfg(target_os = "linux")]
+fn stops_in_its_own_network_namespace(args: &[&str]) -> Result<(), String> {
+    let own = std::fs::read_link("/proc/self/ns/net").map_err(|e| e.to_string())?;
+    let mut c = Command::new(BIN).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    let start = std::time::Instant::now();
+    let mut ok = false;
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        if c.try_wait().unwrap().is_some() {
+            break; // gone before it got to the data: whatever it says is in stderr
+        }
+        if std::fs::read_link(format!("/proc/{}/ns/net", c.id())).is_ok_and(|ns| ns != own) {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = c.kill();
+    let err = String::from_utf8_lossy(&c.wait_with_output().unwrap().stderr).into_owned();
+    if ok { Ok(()) } else { Err(err) }
+}
+
+// `sandbox_blocks_connections` shows that entering the sandbox cuts the network; this shows that every command that must be
+// offline enters it: without `sandbox::enter()` in main, the process stays in this test's network namespace.
+#[cfg(target_os = "linux")]
+#[test]
+fn check_report_and_verify_each_leave_the_network_before_they_read_anything() {
+    let d = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sandbox-fifo");
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let fifo = d.join("flows.ndjson");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    std::fs::write(d.join("flows.meta.json"), meta("")).unwrap(); // a good meta, so that the events are what blocks
+    let (f, html) = (fifo.to_str().unwrap(), d.join("r.html"));
+    let id = "0".repeat(64);
+    let cases: [(&str, Vec<&str>); 3] = [
+        ("check", vec!["check", "--unshield", "1", "--data", f]),
+        ("report", vec!["report", "--data", f, "--out", html.to_str().unwrap()]),
+        ("verify", vec!["verify", &id, "--data", f]),
+    ];
+    for (name, args) in cases {
+        if let Err(err) = stops_in_its_own_network_namespace(&args) {
+            panic!("`zcrowd {name}` did not enter a network namespace of its own before reading its data: {err}");
+        }
+    }
+}
+
+const FIXTURE_TX: &str = "954c19b2c73e667170c28b8d3a94fd96582cba736a5ed7275a10fc0c3e64e149";
+
+// `verify` reads the transaction id privately with `-`, as `check` reads the amount; an id in the arguments stays in shell
+// history, which says which transaction was looked at.
+#[test]
+fn verify_reads_the_id_from_stdin_notes_one_in_the_arguments_and_advises_spot_checks() {
+    let fixtures = format!("{}/../../fixtures", env!("CARGO_MANIFEST_DIR"));
+    let sample = std::fs::read_to_string(format!("{fixtures}/flows-sample.ndjson")).unwrap();
+    let event = sample.lines().find(|l| l.contains(FIXTURE_TX)).unwrap().to_string();
+    let d = data_file("cli-verify.ndjson", std::slice::from_ref(&event));
+    let (f, raw) = (d.to_str().unwrap(), format!("{fixtures}/raw"));
+    let verify = |id: &str, stdin: Option<&str>| run(&["verify", id, "--data", f, "--raw-dir", &raw], stdin);
+
+    let (ok, out, err) = verify("-", Some(&format!("{FIXTURE_TX}\n")));
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("MATCH: recomputed") && !err.contains("shell history"), "{out}{err}");
+    assert!(out.contains("Spot-check random events, not your own matches, and open the explorer over Tor"), "{out}");
+    assert!(!out.contains("compare on any explorer"), "{out}");
+    // blanks and capitals around a typed id are forgiven
+    let (ok, out, _) = verify("-", Some(&format!("  {}  \n", FIXTURE_TX.to_uppercase())));
+    assert!(ok && out.contains("MATCH"), "{out}");
+    // an id in the arguments works and says where it stays
+    let (ok, out, err) = verify(FIXTURE_TX, None);
+    assert!(ok && out.contains("MATCH"), "{out}{err}");
+    assert!(err.contains("a transaction id given as an argument is visible in shell history"), "{err}");
+    // neither a word nor an id that is not in the data is printed back
+    for (typed, want) in [("zz-not-an-id", "not a transaction id"), ("0".repeat(64).as_str(), "is not an event")] {
+        let (ok, out, err) = verify("-", Some(&format!("{typed}\n")));
+        assert!(!ok && out.is_empty() && err.contains(want) && !err.contains(typed), "{out}{err}");
+    }
+    // data of another zcrowd version is refused here too, not decoded against a different format
+    let old = data_file_meta("cli-verify-old.ndjson", &[event], Some(r#"{"first_h":1,"first_t":1,"last_h":2,"last_t":2}"#));
+    let (ok, _, err) = run(&["verify", "-", "--data", old.to_str().unwrap(), "--raw-dir", &raw], Some(&format!("{FIXTURE_TX}\n")));
+    assert!(!ok && err.contains(OTHER_VERSION), "{err}");
 }
 
 #[test]

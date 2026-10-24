@@ -489,9 +489,14 @@ it with the Rust output wherever the case is reachable):
   the filter does not name `ptrace`, `process_vm_writev` or `pidfd_getfd`, and an inherited descriptor stays usable. Theoretical:
   `check`, `report` and `verify` inherit only stdio from the shell, and Yama `ptrace_scope` 1 (the Ubuntu default) limits
   tracing to descendants. Not changed, said in the docs.
+- **F3, F4 (documentation only; a comment in `check.rs` cites F3).** The `check:` header no longer prints the typed amount, but
+  the match lines print each match's own amount to the zatoshi and `--json` carries the matches' txids and the suggested amounts.
+  An unshield's matches lie within the fee allowance above the typed amount, so the output is as sensitive as the amount: P3 of
+  docs/PRIVACY.md must say so (F3; `the_amount_typed_is_never_printed_back` covers the header, the errors and the warning, not
+  the match lines). The README examples still show the typed amount in the header (F4) and are regenerated from real output.
 - **Docs.** README.md and docs/ belong to the next stage (S11); every change of an output line and every claim with its
-  check is in `scratch/zecathon/handoff/S9d-docs.md` (F3 and F4: the amount IS printed in the match lines and in `--json`;
-  S3-5: shield sources are not authenticated by the txid), as the brief says.
+  check is in `scratch/zecathon/handoff/S9d-docs.md` (the texts for F3 and F4 are in its section 3; S3-5: shield sources are
+  not authenticated by the txid), as the brief says.
 
 The sample and the number in the examples above are those of the unchanged sample; the stale coinbase `src` lines of the sample
 (1,466) are still in it, `verify` on them shows DIFF until the data refresh (S9e).

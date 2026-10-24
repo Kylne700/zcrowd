@@ -8,6 +8,8 @@ name: CI
 # browsers  the web page in Chromium, Firefox and WebKit.
 # deny      cargo-deny with deny.toml: advisories, licences, bans, sources.
 # Offline on purpose: fixtures only, no lightwalletd, no Tor network.
+# Linux jobs name ubuntu-24.04, not ubuntu-latest: GitHub moves that label to Ubuntu 26.04 in November 2026, and CI should not change
+# without a commit of ours.
 
 on:
   push:
@@ -48,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.all_os && '["ubuntu-latest","macos-latest","windows-latest"]' || github.ref_name == 'ci' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.all_os && '["ubuntu-24.04","macos-latest","windows-latest"]' || github.ref_name == 'ci' && '["ubuntu-24.04"]' || '["ubuntu-24.04","macos-latest","windows-latest"]') }}
     steps:
       # The fixtures are compared byte for byte, so Git must not turn LF into CRLF on Windows.
       - name: Keep line endings as committed
@@ -109,7 +111,7 @@ jobs:
 
   e2e:
     name: fmt, clippy, tests and audit (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Check out (whole history, because the audit checks every commit author)
@@ -171,7 +173,7 @@ jobs:
 
   browsers:
     name: web page in ${{ matrix.browser }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -204,7 +206,7 @@ jobs:
 
   deny:
     name: cargo-deny
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out

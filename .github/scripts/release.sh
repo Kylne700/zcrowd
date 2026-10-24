@@ -36,6 +36,27 @@ check_clean() {
   rm -f "$list"
 }
 
+# $1 = binary, $2 = target. Prints the shared libraries the binary needs and fails on one the user's machine may not have.
+check_links() {
+  local bad=""
+  case $2 in
+    *linux*)
+      ldd "$1"
+      # glibc and the system SQLite (libsqlite3-sys is not bundled yet). Anything else is a decision for a person.
+      bad=$(ldd "$1" | awk '{print $1}' | grep -Ev '^(linux-vdso\.so\.1|/lib64/ld-linux-x86-64\.so\.2|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|libsqlite3\.so\.0)$' || true)
+      ;;
+    *apple*)
+      otool -L "$1"
+      bad=$(otool -L "$1" | tail -n +2 | awk '{print $1}' | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
+      ;;
+  esac
+  if [ -n "$bad" ]; then
+    echo "FAIL: the binary needs libraries that are not part of the system:" >&2
+    echo "$bad" >&2
+    return 1
+  fi
+}
+
 # Maps the cargo home, rustup home and workspace to fixed names, so panic messages and debug paths hold none of them.
 remap_flags() {
   local home=${CARGO_HOME:-$HOME/.cargo} rustup_home=${RUSTUP_HOME:-$HOME/.rustup} ws=${GITHUB_WORKSPACE:-$PWD}
@@ -54,17 +75,15 @@ main() {
   name=zcrowd-$version-$target
   bin=target/$target/release/zcrowd$ext
 
-  RUSTFLAGS=$(remap_flags) cargo build --locked --release --target "$target" -p zcrowd
+  # LZMA_API_STATIC: build liblzma from the bundled source, whatever the builder has installed (Homebrew's xz would be linked by path).
+  RUSTFLAGS=$(remap_flags) LZMA_API_STATIC=1 cargo build --locked --release --target "$target" -p zcrowd
 
   # The binary must start and answer on its own target (a missing library shows up here).
   "$bin" --version
   out=$(printf '1.0\n' | "$bin" check --unshield - --data fixtures/flows-sample.ndjson 2>&1) || { echo "$out"; exit 1; }
   echo "$out"
   echo "$out" | grep -E '^verdict: (NO MATCH|RED|AMBER|GREEN)' >/dev/null
-  case $target in
-    *linux*) ldd "$bin" || true ;;
-    *apple*) otool -L "$bin" ;;
-  esac
+  check_links "$bin" "$target"
 
   rm -rf dist
   mkdir -p "dist/stage/$name" dist/check

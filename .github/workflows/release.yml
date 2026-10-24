@@ -103,7 +103,7 @@ jobs:
   sums:
     name: SHA256SUMS
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Fetch the archives
@@ -134,7 +134,7 @@ jobs:
     name: draft release
     needs: sums
     if: github.ref_type == 'tag' || inputs.draft
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write

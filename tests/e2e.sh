@@ -44,21 +44,48 @@ PY
 ok "offline sync from fixtures: 3 events, range ends at tip-10 (3522630), 3 of 3 txids recomputed, 0 mismatches"
 
 # check on the freshly synced file and on the committed sample, via stdin (nothing typed goes into a process argument)
-"$BIN" check --shield 15.01006756 --data "$T/s/flows.ndjson" >"$T/c0" 2>&1 || die "check on synced file"
+"$BIN" check --shield 15.01006756 --pool sapling --data "$T/s/flows.ndjson" >"$T/c0" 2>&1 || die "check on synced file"
 contract "$T/c0" "check --shield on synced file"
-grep -q '^crowd: k=1 weighted=1\.0 ' "$T/c0" && grep -q '^verdict: AMBER' "$T/c0" || die "check --shield 15.01006756: expected k=1 (the one shield of that amount) AMBER"
+grep -q '^crowd: k=1 weighted=1\.0 ' "$T/c0" && grep -q '^verdict: AMBER' "$T/c0" || die "check --shield 15.01006756 --pool sapling: expected k=1 (the one shield of that amount) AMBER"
+# spec 41 A11: one line per pool, the worst pool decides. 1.0 ZEC has no Sapling or Orchard crowd, 162 entries into Ironwood
 printf '1.0\n' | "$BIN" check --unshield - --data "$D" >"$T/c1" 2>&1 || die "check 1.0"
 contract "$T/c1" "check 1.0"
-grep -q '^verdict: NO MATCH' "$T/c1" || die "check 1.0: expected NO MATCH"
+grep -q '^pool sapling: k=0 weighted=0\.0 -> NO MATCH' "$T/c1" && grep -q '^pool orchard: k=0 weighted=0\.0 -> NO MATCH' "$T/c1" \
+  && grep -q '^pool ironwood: k=162 weighted=112\.0 -> GREEN' "$T/c1" || die "check 1.0: expected one line per pool (sapling and orchard NO MATCH, ironwood k=162 GREEN)"
+grep -q '^crowd: k=162 weighted=112\.0 ' "$T/c1" && grep -q '^verdict: GREEN' "$T/c1" || die "check 1.0: expected the worst pool (ironwood) k=162 weighted=112.0 GREEN"
+printf '2.74012345\n' | "$BIN" check --unshield - --data "$D" >"$T/c1b" 2>&1 || die "check 2.74012345"
+contract "$T/c1b" "check 2.74012345"
+grep -q '^verdict: NO MATCH' "$T/c1b" || die "check 2.74012345: expected NO MATCH (no entry of that amount in any pool)"
 printf '1.2497\n' | "$BIN" check --unshield - --data "$D" >"$T/c2" 2>&1 || die "check 1.2497"
 contract "$T/c2" "check 1.2497"
-grep -q '^crowd: k=157 weighted=114\.5 ' "$T/c2" && grep -q '^verdict: GREEN' "$T/c2" || die "check 1.2497: expected k=157 weighted=114.5 GREEN"
+grep -q '^pool ironwood: k=592 weighted=437\.0 -> GREEN' "$T/c2" && grep -q '^crowd: k=157 weighted=114\.5 ' "$T/c2" && grep -q '^verdict: GREEN' "$T/c2" \
+  || die "check 1.2497: expected the worst pool (sapling) k=157 weighted=114.5 GREEN, next to ironwood k=592"
+# --pool answers for one pool; a crowd in another pool is no cover (125 ZEC: 40 entries into Sapling, none into Ironwood)
+printf '1.2497\n' | "$BIN" check --unshield - --pool ironwood --data "$D" >"$T/c2i" 2>&1 || die "check --pool ironwood"
+contract "$T/c2i" "check 1.2497 --pool ironwood"
+grep -q '^crowd: k=592 weighted=437\.0 ' "$T/c2i" && grep -q '^verdict: GREEN' "$T/c2i" || die "check 1.2497 --pool ironwood: expected k=592 weighted=437.0 GREEN"
+printf '1.2497\n' | "$BIN" check --unshield - --pool orchard --data "$D" >"$T/c2o" 2>&1 || die "check --pool orchard"
+grep -q '^verdict: NO MATCH' "$T/c2o" || die "check 1.2497 --pool orchard: expected NO MATCH (nothing entered Orchard in the sample)"
+for pp in sapling ironwood; do
+  printf '125\n' | "$BIN" check --unshield - --pool $pp --data "$D" >"$T/c125$pp" 2>&1 || die "check 125 --pool $pp"
+  contract "$T/c125$pp" "check 125 --pool $pp"
+done
+grep -q '^crowd: k=40 weighted=28\.0 ' "$T/c125sapling" && grep -q '^verdict: GREEN' "$T/c125sapling" \
+  && grep -q '^crowd: k=0 weighted=0\.0 ' "$T/c125ironwood" && grep -q '^verdict: NO MATCH' "$T/c125ironwood" \
+  || die "check 125: expected Sapling k=40 GREEN and Ironwood NO MATCH"
 printf '1.2497\n' | "$BIN" check --unshield - --json --data "$D" >"$T/c3" 2>&1 || die "check --json"
 python3 - "$T/c3" <<'PY' || die "check --json: fields differ from the text output"
 import json, sys
 j = json.load(open(sys.argv[1]))
-assert (j["k"], j["weighted"], j["verdict"]) == (157, 114.5, "GREEN"), j
+assert (j["k"], j["weighted"], j["verdict"], j["pool"]) == (157, 114.5, "GREEN", "sapling"), j
+assert [(p["pool"], p["k"]) for p in j["pools"]] == [("sapling", 157), ("orchard", 0), ("ironwood", 592)], j["pools"]
 PY
+# research/43 S1-1: the send-max round trip through an Ironwood-only shield. 43bdcfaf... shielded 0.27967119 ZEC into Ironwood;
+# unshielding it again with the 15000 zat fee gives 0.27952119 ZEC. The Ironwood-blind sample said NO MATCH for this amount.
+printf '0.27952119\n' | "$BIN" check --unshield - --data "$D" >"$T/c2r" 2>&1 || die "check 0.27952119"
+contract "$T/c2r" "check 0.27952119"
+grep -q '^pool ironwood: k=3 weighted=2\.5 -> AMBER' "$T/c2r" && grep -Fq '43bdcfaf262ba320576337dc63683bf4817ca6b03b0ff3a45ac156cbbd62e9c9' "$T/c2r" \
+  && ! grep -q '^verdict: NO MATCH' "$T/c2r" || die "check 0.27952119: the Ironwood-only shield 43bdcfaf... must be found (k=3 AMBER), not NO MATCH"
 ADDR=$(python3 - <<'PY'
 import json
 for l in open("fixtures/flows-sample.ndjson"):
@@ -91,20 +118,20 @@ contract "$T/c6" "check 3.73"
 grep -q '^crowd: k=1 weighted=1\.0 ' "$T/c6" && grep -q '^verdict: RED' "$T/c6" \
   && grep -Fq '6bdcbce819dd2b5a8e80126f7274d799af98d4d4d426c69b54e67eb4bd0e69b6' "$T/c6" \
   || die "check 3.73: the README example (k=1 weighted=1.0, RED, one match) changed"
-ok "check: one verdict line and one crowd line each time; 1.0 NO MATCH; 1.2497 k=157 weighted=114.5 GREEN (text and --json); 3.73 k=1 RED; --to a shield source address RED (text and --json overall verdict)"
+ok "check: one verdict line and one crowd line each time, a line per pool; 1.0 GREEN (ironwood k=162); 1.2497 k=157 weighted=114.5 GREEN (text and --json); --pool; 125 ZEC Sapling k=40 vs Ironwood NO MATCH; the Ironwood-only round trip is found; 3.73 k=1 RED; --to a shield source address RED (text and --json overall verdict)"
 
 # report and verify
 "$BIN" report --data "$D" --out "$T/r.html" >/dev/null 2>&1 || die "report"
-grep -Fq '<tr><td>RED</td><td>253</td><td>17.6%</td></tr>' "$T/r.html" || die "report: the README figure (253 RED, 17.6%) is not what the report shows"
-grep -Fq '<tr><td>NO MATCH</td><td>828</td><td>57.5%</td></tr>' "$T/r.html" || die "report: NO MATCH row differs from the README figure"
-ok "report on the committed sample: 1440 unshields in the last 14 days = NO MATCH 828 (57.5%), RED 253 (17.6%), as the README says"
+grep -Fq '<tr><td>RED</td><td>1405</td><td>7.9%</td></tr>' "$T/r.html" || die "report: the README figure (1405 RED, 7.9%) is not what the report shows"
+grep -Fq '<tr><td>NO MATCH</td><td>3642</td><td>20.4%</td></tr>' "$T/r.html" || die "report: NO MATCH row differs from the README figure"
+ok "report on the committed sample: 17827 unshields in the last 14 days = NO MATCH 3642 (20.4%), RED 1405 (7.9%), as the README says"
 "$BIN" verify 954c19b2c73e667170c28b8d3a94fd96582cba736a5ed7275a10fc0c3e64e149 --data "$D" --raw-dir fixtures/raw >"$T/v" 2>&1 || die "verify"
 grep -q '^MATCH' "$T/v" || die "verify: no MATCH line"
 ok "verify of a fixture transaction: MATCH (decoded from the cached raw bytes, offline)"
 
 # library use in five lines
-cargo run -q -p zcrowd-core --example five_lines 2>/dev/null | grep -Fxq 'crowd 157 -> GREEN' || die "example five_lines"
-ok "example five_lines prints: crowd 157 -> GREEN"
+cargo run -q -p zcrowd-core --example five_lines 2>/dev/null | grep -Fxq 'crowd 592 -> GREEN' || die "example five_lines"
+ok "example five_lines prints: crowd 592 -> GREEN"
 
 if [ "${LIVE:-}" = 1 ]; then
   mkdir -p "$T/live"

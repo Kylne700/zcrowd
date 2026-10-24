@@ -30,7 +30,8 @@ ok "build"
 # P1: the requests sync makes depend only on the block range
 cargo test -q -p zcrowd-core --test ingest -- --list >"$T/list" 2>/dev/null
 for t in sync_requests_depend_only_on_range wrong_or_broken_transactions_are_dropped_counted_and_never_cached \
-  broken_block_chain_is_an_error block_chain_is_checked_across_request_chunks; do
+  broken_block_chain_is_an_error block_chain_is_checked_across_request_chunks candidate_kinds_cover_coinbase_and_moves \
+  a_long_range_without_any_candidate_is_an_error; do
   grep -q "^$t: test" "$T/list" || die "P1/P8: test $t is missing"
 done
 must_pass "P1/P8 ingest tests" cargo test -q -p zcrowd-core --test ingest
@@ -116,7 +117,9 @@ cargo tree --locked --prefix none >"$T/tree" 2>"$T/tree.err" || { cat "$T/tree.e
 if grep -Ei '^(reqwest|sentry|posthog|segment|openssl|openssl-sys|native-tls|hyper-tls) |analytics|telemetry|updat' "$T/tree"; then
   die "P5 a forbidden dependency is in the tree"
 fi
-ok "P5 $(sort -u "$T/tree" | wc -l) distinct crates in cargo tree, none of reqwest, sentry, posthog, segment, openssl, native-tls, analytics, telemetry, update; Cargo.lock tracked"
+CRATES=$(awk '{print $1, $2}' "$T/tree" | sort -u | wc -l) # name + version; the lines of the tree repeat and carry paths and (*)
+LOCKED=$(grep -c '^\[\[package\]\]' Cargo.lock)
+ok "P5 $CRATES crate versions in cargo tree ($LOCKED packages in Cargo.lock), none of reqwest, sentry, posthog, segment, openssl, native-tls, analytics, telemetry, update; Cargo.lock tracked"
 
 # P6: TLS is verified, plain text is refused
 if git grep -nE 'accept_invalid|danger' -- crates; then die "P6 certificate checks are switched off somewhere"; fi

@@ -99,3 +99,13 @@ fn shielded_coinbase_entries_in_the_sample_are_counted() {
         assert!(k >= 1, "{}: its own coinbase entry is not counted", e.txid);
     }
 }
+
+// The README says nothing entered Orchard in the sample (30 days, 2026-09-24..2026-10-24): every Orchard unshield check is
+// NO MATCH there. If a newer sample ever has Orchard entries, this fails and the README sentence must change.
+#[test]
+fn nothing_entered_orchard_in_the_sample() {
+    let (events, _) = sample();
+    let into_orchard = events.iter().filter(|e| e.pool == Pool::Orchard && matches!(e.kind, Kind::Shield | Kind::Move)).count();
+    assert_eq!(into_orchard, 0);
+    assert!(events.iter().any(|e| e.pool == Pool::Orchard && e.kind == Kind::Unshield), "the sample has Orchard unshields");
+}

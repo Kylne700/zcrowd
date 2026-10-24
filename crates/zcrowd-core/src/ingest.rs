@@ -5,11 +5,21 @@ use anyhow::{Result, bail};
 use futures::{StreamExt, stream};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use zcash_protocol::consensus::{MainNetwork, NetworkUpgrade, Parameters};
 
 pub const CHUNK: u64 = 2000;
 pub const MAX_CONCURRENCY: usize = 8;
 /// A range longer than this with no shield-like or unshield-like transaction at all is refused (see `candidates`).
 const MIN_BLOCKS_WITH_CANDIDATES: usize = 100;
+/// From the activation of NU6.3 on, more blocks than this with data in some shielded pool and none in another refuses the
+/// range: the server leaves that pool out (see `candidates`).
+const MIN_BLOCKS_BEFORE_POOL_MISSING: usize = 1000;
+const POOL_NAMES: [&str; 3] = ["Sapling", "Orchard", "Ironwood"];
+
+/// First block in which all three pools (Sapling, Orchard, Ironwood) exist: the activation of NU6.3.
+pub fn all_pools_from() -> u64 {
+    MainNetwork.activation_height(NetworkUpgrade::Nu6_3).map_or(u64::MAX, |h| u64::from(u32::from(h)))
+}
 
 #[derive(Clone, Debug)]
 pub struct Cand {
@@ -30,6 +40,11 @@ pub struct Stats {
     /// Of shield_like: coinbase transactions (shielded block rewards).
     pub coinbase_like: usize,
     pub coverage: Option<Coverage>,
+    /// Of the blocks from NU6.3 on (`all_pools_from`): how many there are, how many hold data in any shielded pool, and
+    /// how many hold data in each of Sapling, Orchard and Ironwood (in that order).
+    pub nu6_3_blocks: usize,
+    pub any_pool_blocks: usize,
+    pub pool_blocks: [usize; 3],
 }
 
 /// For a server as the source: heights must be consecutive from `start`, and each block's prev_hash must be
@@ -63,6 +78,7 @@ fn link(blk: &BlockSummary, prev: &mut Option<(u64, String)>, start: u64) -> Res
 pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result<(Vec<Cand>, Stats)> {
     let (mut out, mut st) = (vec![], Stats::default());
     let (strict, mut prev) = (src.strict_chain(), None);
+    let all_pools = all_pools_from();
     let mut a = start;
     while a <= end {
         let b = (a + CHUNK - 1).min(end);
@@ -77,6 +93,12 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
             // the extremes seen, so no event of the window lies after `now` and is mistaken for the future.
             cov.first_t = cov.first_t.min(blk.t);
             cov.last_t = cov.last_t.max(blk.t);
+            if blk.h >= all_pools {
+                let seen = blk.txs.iter().fold([false; 3], |a, t| [a[0] | t.pools[0], a[1] | t.pools[1], a[2] | t.pools[2]]);
+                st.nu6_3_blocks += 1;
+                st.any_pool_blocks += usize::from(seen.contains(&true));
+                st.pool_blocks.iter_mut().zip(seen).for_each(|(n, s)| *n += usize::from(s));
+            }
             for t in &blk.txs {
                 st.txs += 1;
                 if !t.shielded {
@@ -111,6 +133,21 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
             "{} blocks came back without one transaction that mixes shielded and transparent data: this server leaves \
              pool data out (try another --server)",
             st.blocks
+        );
+    }
+    // The same for pools: from NU6.3 on all three are in use, so a long range where other pools show data and one shows
+    // none means the server leaves it out (an outdated lightwalletd does not know Ironwood). Silence would pass for a
+    // quiet pool and give a false NO MATCH.
+    // shortcut: Orchard activity is falling (about 40% fewer shields and unshields per 15 days in Oct 2026, though z-to-z
+    // blocks keep it present); a short range could one day hold no Orchard block by chance and fail here. Upgrade: judge
+    // Orchard over a longer range, or drop it from this check, once the live per-pool counts `sync` prints say so.
+    if st.any_pool_blocks > MIN_BLOCKS_BEFORE_POOL_MISSING
+        && let Some(i) = st.pool_blocks.iter().position(|&n| n == 0)
+    {
+        bail!(
+            "server returns no {} data (outdated lightwalletd?): {} blocks from block {all_pools} (NU6.3) on hold data of the other pools and none holds this one (try another --server)",
+            POOL_NAMES[i],
+            st.any_pool_blocks
         );
     }
     Ok((out, st))

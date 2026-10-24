@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
-use zcrowd_core::ingest::{RawCache, candidates, resolve};
+use zcrowd_core::ingest::{RawCache, all_pools_from, candidates, resolve};
 use zcrowd_core::source::{BlockSource, BlockSummary, Fixtures, Recording, TxSummary};
 
 fn fixtures() -> Fixtures {
@@ -122,7 +122,7 @@ async fn a_corrupt_cache_file_is_fetched_again_and_overwritten() {
 struct Chain(Vec<BlockSummary>);
 
 fn tx(id: u64, n_vin: usize, n_vout: usize, shielded: bool, multi_pool: bool, coinbase: bool) -> TxSummary {
-    TxSummary { txid: format!("{id:064x}"), n_vin, n_vout, shielded, multi_pool, coinbase }
+    TxSummary { txid: format!("{id:064x}"), n_vin, n_vout, shielded, multi_pool, pools: [false; 3], coinbase }
 }
 
 /// Every block carries one shield-like transaction: a long range with none is refused.
@@ -251,4 +251,51 @@ async fn the_windows_times_are_the_extremes_of_the_block_times_not_those_of_its_
     // in order, as before: the first and the last block
     let cov = candidates(&chain(1_000, 100), 1_000, 1_099).await.unwrap().1.coverage.unwrap();
     assert_eq!((cov.first_t, cov.last_t), (1_700_001_000, 1_700_001_099));
+}
+
+/// `n` blocks from the activation of NU6.3 on, each with data in the given pools (Sapling, Orchard, Ironwood).
+fn pooled(n: u64, pools: [bool; 3]) -> Chain {
+    let mut c = chain(all_pools_from(), n);
+    c.0.iter_mut().for_each(|b| b.txs[0].pools = pools);
+    c
+}
+
+async fn crawl(c: &Chain) -> anyhow::Result<zcrowd_core::ingest::Stats> {
+    candidates(c, c.0[0].h, c.0.last().unwrap().h).await.map(|r| r.1)
+}
+
+// A server that leaves one pool out must not look like a quiet pool: that would be a false NO MATCH.
+#[tokio::test]
+async fn a_server_that_leaves_a_pool_out_is_refused_after_the_activation_of_nu6_3() {
+    assert_eq!(all_pools_from(), 3_428_143);
+    let st = crawl(&pooled(1_001, [true; 3])).await.unwrap();
+    assert_eq!((st.nu6_3_blocks, st.any_pool_blocks, st.pool_blocks), (1_001, 1_001, [1_001; 3]));
+    for (pools, missing) in [
+        ([true, true, false], "Ironwood"), // a lightwalletd from before NU6.3
+        ([true, false, true], "Orchard"),
+        ([false, true, true], "Sapling"),
+        ([true, false, false], "Orchard"), // the first missing pool is named
+    ] {
+        let e = format!("{:#}", crawl(&pooled(1_001, pools)).await.unwrap_err());
+        assert!(e.contains(&format!("server returns no {missing} data (outdated lightwalletd?)")), "{pools:?}: {e}");
+    }
+    // 1000 blocks may lack a pool, 1001 may not
+    assert!(crawl(&pooled(1_000, [true, true, false])).await.is_ok());
+    // one block with the pool is enough, wherever it sits
+    let mut c = pooled(1_500, [true, true, false]);
+    c.0[1_400].txs.push(TxSummary { pools: [false, false, true], ..tx(9, 0, 0, true, false, false) });
+    assert_eq!(crawl(&c).await.unwrap().pool_blocks, [1_500, 1_500, 1]);
+}
+
+#[tokio::test]
+async fn blocks_before_the_activation_of_nu6_3_do_not_count_for_the_pool_check() {
+    let from = all_pools_from();
+    let mut c = chain(from - 1_500, 2_000); // 1500 blocks before the activation, 500 from it on
+    c.0.iter_mut().for_each(|b| b.txs[0].pools = [true, true, false]);
+    let st = crawl(&c).await.unwrap();
+    assert_eq!((st.nu6_3_blocks, st.any_pool_blocks, st.pool_blocks), (500, 500, [500, 500, 0]));
+    // before the activation there is no Ironwood to miss, however long the range
+    let mut c = chain(from - 3_000, 2_500);
+    c.0.iter_mut().for_each(|b| b.txs[0].pools = [true, true, false]);
+    assert_eq!(crawl(&c).await.unwrap().nu6_3_blocks, 0);
 }

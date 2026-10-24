@@ -8,6 +8,7 @@ use zcash_client_backend::proto::service::{
     BlockId, BlockRange, ChainSpec, Empty, PoolType, TxFilter, compact_tx_streamer_client::CompactTxStreamerClient,
 };
 use zcash_client_backend::tor;
+use zcash_protocol::consensus::{BlockHeight, BranchId, MainNetwork};
 
 /// The few public facts per transaction that zcrowd needs from a compact block.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +22,9 @@ pub struct TxSummary {
     /// Two or more of those pools are touched: a possible move between pools.
     #[serde(default)]
     pub multi_pool: bool,
+    /// Which pools it touches, in the order Sapling, Orchard, Ironwood (absent in the committed fixtures: all false).
+    #[serde(default)]
+    pub pools: [bool; 3],
     pub coinbase: bool,
 }
 
@@ -119,6 +123,26 @@ where
     unreachable!()
 }
 
+/// The consensus branch id a server reports for its tip must be the one this build expects at that height (hex, with or
+/// without `0x`). A server that does not know the network upgrade in force, or a zcrowd that does not, would leave pools
+/// out or misread them. A server that leaves the field empty (or the height at 0) is not checked.
+pub fn check_branch_id(reported: &str, tip_height: u64) -> Result<()> {
+    let r = reported.trim();
+    let r = r.strip_prefix("0x").or_else(|| r.strip_prefix("0X")).unwrap_or(r);
+    if r.is_empty() || tip_height == 0 {
+        return Ok(());
+    }
+    let h = u32::try_from(tip_height).context("server tip height")?;
+    let want = u32::from(BranchId::for_height(&MainNetwork, BlockHeight::from_u32(h)));
+    let got = u32::from_str_radix(r, 16).map_err(|_| anyhow!("server reports consensus branch id {reported:?}, which is not hex"))?;
+    if got != want {
+        bail!(
+            "server reports consensus branch id {got:08x} at block {tip_height} but {want:08x} is expected there: outdated lightwalletd or outdated zcrowd (try another --server)"
+        );
+    }
+    Ok(())
+}
+
 impl Lwd {
     /// Try servers in order; the first that answers as a mainnet lightwalletd is used.
     /// Only that one server is ever contacted afterwards.
@@ -156,6 +180,7 @@ impl Lwd {
         if info.chain_name != "main" {
             bail!("server reports chain {:?}, expected main", info.chain_name);
         }
+        check_branch_id(&info.consensus_branch_id, info.block_height)?;
         Ok(Lwd { client, url: url.to_string(), tor: tor.is_some() })
     }
 }
@@ -204,6 +229,7 @@ impl BlockSource for Lwd {
                         n_vout: t.vout.len(),
                         shielded: pools.contains(&true),
                         multi_pool: pools.iter().filter(|&&p| p).count() > 1,
+                        pools,
                         // The compact `vin` leaves the coinbase input out; the coinbase is the block's first
                         // transaction (zcash_client_backend 0.25 proto/compact_formats.rs, `CompactTx.vin`).
                         coinbase: t.index == 0,
@@ -307,7 +333,7 @@ impl<S: BlockSource> BlockSource for Recording<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::require_tls;
+    use super::*;
 
     #[test]
     fn plain_text_only_to_this_machine() {
@@ -323,5 +349,27 @@ mod tests {
         ] {
             assert!(require_tls(bad).is_err(), "{bad}");
         }
+    }
+
+    fn id_at(h: u32) -> String {
+        format!("{:08x}", u32::from(BranchId::for_height(&MainNetwork, BlockHeight::from_u32(h))))
+    }
+
+    #[test]
+    fn the_branch_id_of_the_tip_must_be_the_one_expected_at_that_height() {
+        for h in [1, 419_200, 1_687_104, 3_428_142, 3_428_143, 3_600_000] {
+            assert!(check_branch_id(&id_at(h), u64::from(h)).is_ok(), "height {h}");
+            assert!(check_branch_id(&format!("0x{}", id_at(h).to_uppercase()), u64::from(h)).is_ok(), "0x prefix, capitals, height {h}");
+        }
+        // Ironwood is in force from block 3428143: a server still on the id of the block before it is outdated
+        assert_ne!(id_at(3_428_142), id_at(3_428_143));
+        assert_eq!(id_at(3_428_143), "37a5165b");
+        let e = check_branch_id(&id_at(3_428_142), 3_428_143).unwrap_err().to_string();
+        assert!(e.contains("outdated lightwalletd or outdated zcrowd") && e.contains("37a5165b"), "{e}");
+        assert!(check_branch_id("deadbeef", 3_600_000).is_err());
+        assert!(check_branch_id("not hex", 3_600_000).is_err());
+        // a field the server does not fill in, or a tip it does not give, is not checked
+        assert!(check_branch_id("", 3_600_000).is_ok() && check_branch_id("  ", 3_600_000).is_ok());
+        assert!(check_branch_id("deadbeef", 0).is_ok());
     }
 }

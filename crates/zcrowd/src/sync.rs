@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 use zcrowd_core::Kind;
-use zcrowd_core::ingest::{RawCache, candidates, resolve};
+use zcrowd_core::ingest::{RawCache, all_pools_from, candidates, resolve};
 use zcrowd_core::model::{FORMAT_VERSION, Meta, read_meta, read_ndjson, save};
 use zcrowd_core::source::BlockSource;
 
@@ -84,6 +84,16 @@ async fn go<S: BlockSource>(
         end,
         t0.elapsed().as_secs_f32()
     );
+    if st.any_pool_blocks > 0 {
+        println!(
+            "pools: of the {} blocks from block {} (NU6.3) on, {} hold Sapling data, {} Orchard, {} Ironwood",
+            st.nu6_3_blocks,
+            all_pools_from(),
+            st.pool_blocks[0],
+            st.pool_blocks[1],
+            st.pool_blocks[2]
+        );
+    }
     if candidates_only {
         return Ok(());
     }

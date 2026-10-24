@@ -12,19 +12,34 @@ const BLOCKS_PER_DAY: u64 = 1152; // 75 s blocks
 /// Stay this far behind the tip so a reorg cannot leave us with blocks that no longer exist.
 const REORG_MARGIN: u64 = 10;
 
-pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurrency: usize) -> Result<()> {
+pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurrency: usize, end_height: Option<u64>) -> Result<()> {
     match src {
         Src::Net(s) => {
-            eprintln!("server: {}", s.url);
-            go(&s, days, out, candidates_only, concurrency).await
+            eprintln!("server: {} ({})", s.url, if s.tor { "via Tor" } else { "direct" });
+            go(&s, days, out, candidates_only, concurrency, end_height).await
         }
-        Src::Fix(s) => go(&s, days, out, candidates_only, concurrency).await,
+        Src::Fix(s) => go(&s, days, out, candidates_only, concurrency, end_height).await,
     }
 }
 
-async fn go<S: BlockSource>(s: &S, days: u64, out: &Path, candidates_only: bool, concurrency: usize) -> Result<()> {
+async fn go<S: BlockSource>(
+    s: &S,
+    days: u64,
+    out: &Path,
+    candidates_only: bool,
+    concurrency: usize,
+    end_height: Option<u64>,
+) -> Result<()> {
     let t0 = Instant::now();
-    let end = s.tip().await?.saturating_sub(REORG_MARGIN);
+    let safe = s.tip().await?.saturating_sub(REORG_MARGIN);
+    let end = match end_height {
+        Some(h) if h > safe => {
+            eprintln!("note: --end-height {h} is inside the reorg margin; stopping at {safe}");
+            safe
+        }
+        Some(h) => h,
+        None => safe,
+    };
     // 144 extra blocks (~3 h) so the window is not a hair short of `days`.
     let start = end.saturating_sub(days * BLOCKS_PER_DAY + 144);
     let (cands, st) = candidates(s, start, end).await?;
@@ -103,7 +118,7 @@ async fn go<S: BlockSource>(s: &S, days: u64, out: &Path, candidates_only: bool,
     );
     println!("wrote {} (raw transactions cached in {})", out.display(), cache.0.display());
     println!(
-        "tip: sync on a schedule, not right before you transact. The server sees your IP and that you run zcrowd, nothing about your wallet; use Tor or a VPN at system level."
+        "tip: sync on a schedule, not right before you transact. The server learns nothing about your wallet, and over Tor (the default) it does not see your IP address either; with --no-tor it does."
     );
     Ok(())
 }

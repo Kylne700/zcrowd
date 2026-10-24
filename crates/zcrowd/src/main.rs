@@ -5,7 +5,7 @@ mod sandbox;
 mod sync;
 mod verify;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use zcrowd_core::crowd::DEFAULT_FEE_ALLOWANCE;
@@ -35,6 +35,20 @@ enum Cmd {
         /// Parallel transaction fetches (at most 8).
         #[arg(long, default_value_t = 8)]
         concurrency: usize,
+        /// Send every request through Tor (the default; built in, nothing to install). If Tor fails, sync stops; it
+        /// never falls back to a direct connection.
+        #[arg(long)]
+        tor: bool,
+        /// Connect directly: the server sees your IP address and that you run zcrowd.
+        #[arg(long, conflicts_with = "tor")]
+        no_tor: bool,
+        /// Where Tor keeps its state (public Tor directory data and guard state only; nothing about your
+        /// queries). Default: $XDG_CACHE_HOME/zcrowd/tor, else ~/.cache/zcrowd/tor.
+        #[arg(long, conflicts_with = "no_tor")]
+        tor_dir: Option<PathBuf>,
+        /// Last block to sync instead of the chain tip minus 10 (never later than that), for repeatable runs.
+        #[arg(long)]
+        end_height: Option<u64>,
     },
     /// How big a crowd does this amount hide in? Offline: cuts its own network access first.
     Check {
@@ -92,21 +106,42 @@ pub enum Src {
     Fix(Fixtures),
 }
 
-async fn open_source(servers: Vec<String>) -> Result<Src> {
+/// $XDG_CACHE_HOME/zcrowd/tor, else ~/.cache/zcrowd/tor. Never a relative path: that could land inside a repo.
+fn default_tor_dir() -> Result<PathBuf> {
+    let abs = |k: &str| std::env::var_os(k).map(PathBuf::from).filter(|p| p.is_absolute());
+    let base = abs("XDG_CACHE_HOME").or_else(|| abs("HOME").map(|h| h.join(".cache")));
+    Ok(base.ok_or_else(|| anyhow!("no cache directory (XDG_CACHE_HOME and HOME are not set); pass --tor-dir"))?.join("zcrowd").join("tor"))
+}
+
+/// Tor is the default: only `--no-tor` connects directly.
+async fn open_source(servers: Vec<String>, no_tor: bool, tor_dir: Option<PathBuf>) -> Result<Src> {
     if std::env::var("ZCROWD_OFFLINE").is_ok_and(|v| v == "1") {
         let dir = std::env::var("ZCROWD_FIXTURES").unwrap_or_else(|_| "fixtures".into());
         return Ok(Src::Fix(Fixtures::open(std::path::Path::new(&dir))?));
     }
     let list = if servers.is_empty() { DEFAULT_SERVERS.map(String::from).to_vec() } else { servers };
-    Ok(Src::Net(Lwd::connect(&list).await?))
+    if no_tor {
+        eprintln!("warning: --no-tor: connecting directly. The server sees your IP address and that you run zcrowd.");
+        return Ok(Src::Net(Lwd::connect(&list, None).await?));
+    }
+    let stop = |e: anyhow::Error| {
+        anyhow!(
+            "{e:#}\n\nTor was selected, so zcrowd did not contact the server directly and will not fall back to a direct connection. \
+             To sync directly instead (the server then sees your IP address), run again with --no-tor."
+        )
+    };
+    let dir = tor_dir.map_or_else(default_tor_dir, Ok).map_err(stop)?;
+    Lwd::connect(&list, Some(&dir)).await.map(Src::Net).map_err(stop)
 }
 
 // Not #[tokio::main]: the sandbox must be entered before any thread exists.
 fn main() -> Result<()> {
     match Cli::parse().cmd {
-        Cmd::Sync { days, server, out, candidates_only, concurrency } => {
+        Cmd::Sync { days, server, out, candidates_only, concurrency, no_tor, tor_dir, end_height, .. } => {
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-            rt.block_on(async { sync::run(open_source(server).await?, days, &out, candidates_only, concurrency).await })
+            rt.block_on(async {
+                sync::run(open_source(server, no_tor, tor_dir).await?, days, &out, candidates_only, concurrency, end_height).await
+            })
         }
         Cmd::Check { unshield, shield, to, lookback_days, tolerance_zat, fee_allowance_zat, data, json } => {
             sandbox::enter();

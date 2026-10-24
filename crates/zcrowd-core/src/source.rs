@@ -3,10 +3,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tonic::transport::{Channel, ClientTlsConfig};
+use tonic::transport::{Channel, ClientTlsConfig, Uri};
 use zcash_client_backend::proto::service::{
     BlockId, BlockRange, ChainSpec, Empty, PoolType, TxFilter, compact_tx_streamer_client::CompactTxStreamerClient,
 };
+use zcash_client_backend::tor;
 
 /// The few public facts per transaction that zcrowd needs from a compact block.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +71,29 @@ fn require_tls(url: &str) -> Result<()> {
 pub struct Lwd {
     client: CompactTxStreamerClient<Channel>,
     pub url: String,
+    /// True when every byte to the server goes through Tor.
+    pub tor: bool,
+}
+
+const STREAM_IDLE: Duration = Duration::from_secs(60);
+
+/// Longer than a cold bootstrap needs (about 30 s); a hang is not a loud failure. ZCROWD_TOR_BOOTSTRAP_SECS overrides it.
+fn tor_bootstrap_timeout() -> Duration {
+    Duration::from_secs(std::env::var("ZCROWD_TOR_BOOTSTRAP_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(120))
+}
+
+/// Bootstrap the built-in Tor client (arti). `dir` holds only public Tor directory data and guard state.
+async fn tor_client(dir: &Path) -> Result<tor::Client> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(dir).with_context(|| format!("Tor directory {}", dir.display()))?;
+    let limit = tor_bootstrap_timeout();
+    tokio::time::timeout(limit, tor::Client::create(dir, |_| {}))
+        .await
+        .map_err(|_| anyhow!("Tor did not bootstrap within {} s", limit.as_secs()))?
+        .context("Tor bootstrap")
 }
 
 async fn retry<T, F, Fut>(what: &str, mut f: F) -> Result<T>
@@ -94,10 +118,16 @@ where
 impl Lwd {
     /// Try servers in order; the first that answers as a mainnet lightwalletd is used.
     /// Only that one server is ever contacted afterwards.
-    pub async fn connect(servers: &[String]) -> Result<Lwd> {
+    /// With `tor_dir`, every connection goes through Tor and there is no other path: a Tor failure is an
+    /// error, never a direct connection.
+    pub async fn connect(servers: &[String], tor_dir: Option<&Path>) -> Result<Lwd> {
+        let tor = match tor_dir {
+            Some(d) => Some(tor_client(d).await?),
+            None => None,
+        };
         let mut last = anyhow!("no servers");
         for url in servers {
-            match Self::try_one(url).await {
+            match Self::try_one(url, tor.as_ref()).await {
                 Ok(l) => return Ok(l),
                 Err(e) => last = e.context(format!("server {url}")),
             }
@@ -105,19 +135,24 @@ impl Lwd {
         Err(last)
     }
 
-    async fn try_one(url: &str) -> Result<Lwd> {
+    async fn try_one(url: &str, tor: Option<&tor::Client>) -> Result<Lwd> {
         require_tls(url)?;
-        let ep = Channel::from_shared(url.to_string())?
-            .tls_config(ClientTlsConfig::new().with_webpki_roots())?
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60));
-        let ch = ep.connect().await?;
-        let mut client = CompactTxStreamerClient::new(ch);
+        let mut client = match tor {
+            // The Tor branch has no direct connection in it; the channel reconnects through Tor only.
+            Some(t) => t.connect_to_lightwalletd(url.parse::<Uri>()?, false).await?,
+            None => {
+                let ep = Channel::from_shared(url.to_string())?
+                    .tls_config(ClientTlsConfig::new().with_webpki_roots())?
+                    .connect_timeout(Duration::from_secs(10))
+                    .timeout(Duration::from_secs(60));
+                CompactTxStreamerClient::new(ep.connect().await?)
+            }
+        };
         let info = client.get_lightd_info(Empty {}).await?.into_inner();
         if info.chain_name != "main" {
             bail!("server reports chain {:?}, expected main", info.chain_name);
         }
-        Ok(Lwd { client, url: url.to_string() })
+        Ok(Lwd { client, url: url.to_string(), tor: tor.is_some() })
     }
 }
 
@@ -145,7 +180,12 @@ impl BlockSource for Lwd {
         .await?
         .into_inner();
         let mut out = vec![];
-        while let Some(b) = stream.message().await.context("block stream")? {
+        // tonic's request timeout ends at the response headers: a server that goes quiet mid-stream must fail, not hang.
+        while let Some(b) = tokio::time::timeout(STREAM_IDLE, stream.message())
+            .await
+            .map_err(|_| anyhow!("block stream: no data for {} s", STREAM_IDLE.as_secs()))?
+            .context("block stream")?
+        {
             let txs = b
                 .vtx
                 .iter()

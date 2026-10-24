@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum Kind {
     Shield,
     Unshield,
-    /// Value moves from one shielded pool into another with no transparent output (spec 41 A11).
+    /// Value moves from one shielded pool into another with no transparent output.
     Move,
 }
 
@@ -42,7 +42,7 @@ impl Pool {
     }
 }
 
-/// One public turnstile crossing or pool move (spec 41 A11). `zat` is the value that arrives in `pool`
+/// One public turnstile crossing or pool move. `zat` is the value that arrives in `pool`
 /// (shield and move) or that leaves it, fee included (unshield). `pool` is Mixed only for low-confidence
 /// multi-pool transactions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

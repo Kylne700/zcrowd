@@ -16,11 +16,11 @@ pub enum Skip {
     /// Transparent and shielded sides both present, but nothing crossed on balance.
     NoNetCrossing,
     /// t_in + value balances = t_out + fee with fee >= 0 does not close, or a value is out of range: the amounts
-    /// cannot be trusted, so there is no event (spec 41 A11).
+    /// cannot be trusted, so there is no event.
     ConservationFails,
     /// A Sprout JoinSplit moves value on the transparent side too; Sprout is not decoded.
     SproutValue,
-    /// The server sent bytes whose transaction id is not the one asked for: dropped (spec 41 A9).
+    /// The server sent bytes whose transaction id is not the one asked for: dropped.
     TxidMismatch,
 }
 
@@ -116,7 +116,7 @@ pub struct Class {
     pub low: bool,
 }
 
-/// Spec 41 A11. `vb` = value balances of Sapling, Orchard, Ironwood (positive: value leaves that pool, negative:
+/// `vb` = value balances of Sapling, Orchard, Ironwood (positive: value leaves that pool, negative:
 /// enters it). E = pools with a negative balance, L = pools with a positive one.
 /// - Shield: one pool in E, L empty, transparent inputs (or coinbase). zat = value entering that pool.
 /// - Unshield: E empty, one pool in L, transparent outputs. zat = value leaving it, fee included.
@@ -259,15 +259,15 @@ mod tests {
         assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Unshield, 1_000_000, Pool::Ironwood, Some(15_000), false));
     }
 
-    // E10 research/44 #7 (48ca0a26...): Ironwood +12_319_850 in, Orchard 46_946 out, one transparent input, no output.
-    // Under A11 this is a shield into Ironwood of the value that arrived there, not the 12_272_904 net crossing.
+    // E10 (48ca0a26..., an explorer cross-check): Ironwood +12_319_850 in, Orchard 46_946 out, one transparent input, no output.
+    // Per pool this is a shield into Ironwood of the value that arrived there, not the 12_272_904 net crossing.
     #[test]
     fn shield_into_one_pool_while_another_pays_in() {
         let c = ok([0, 46_946, -12_319_850], 1, 0, 0);
         assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Shield, 12_319_850, Pool::Ironwood, None, false));
     }
 
-    // research/44 #9 (ce7e196a...): two pools pay out to a transparent output, so it is not a single-pool unshield.
+    // explorer cross-check (ce7e196a...): two pools pay out to a transparent output, so it is not a single-pool unshield.
     #[test]
     fn two_leaving_pools_are_low_confidence_unshield() {
         let c = ok([0, 3_494_678, 530_322], 0, 1, 4_000_000);

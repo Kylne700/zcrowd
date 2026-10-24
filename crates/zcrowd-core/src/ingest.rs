@@ -32,7 +32,7 @@ pub struct Stats {
     pub coverage: Option<Coverage>,
 }
 
-/// Spec 41 A9, for a server as the source: heights must be consecutive from `start`, and each block's prev_hash must be
+/// For a server as the source: heights must be consecutive from `start`, and each block's prev_hash must be
 /// the hash of the block before. Catches a server that skips blocks, cuts a range short or splices two forks.
 /// It cannot tell a consistent liar from the real chain (the compact blocks carry no proof of work).
 fn link(blk: &BlockSummary, prev: &mut Option<(u64, String)>, start: u64) -> Result<()> {
@@ -79,7 +79,7 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
                 if !t.shielded {
                     continue;
                 }
-                // The compact vin omits the coinbase input, so a shielded coinbase has n_vin == 0 (spec 41 S3-4).
+                // The compact vin omits the coinbase input, so a shielded coinbase has n_vin == 0.
                 let kind = if t.n_vin > 0 || t.coinbase {
                     st.shield_like += 1;
                     st.coinbase_like += usize::from(t.coinbase);
@@ -102,7 +102,7 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
         bail!("the server stopped at block {:?} but {end} was asked for (try another --server)", prev.map(|p| p.0));
     }
     // Mainnet has dozens of these per 100 blocks; none means the server leaves shielded or transparent data out
-    // (research/43 S3-2). Without this an empty answer would look like a complete, quiet period.
+    // Without this an empty answer would look like a complete, quiet period.
     if st.blocks > MIN_BLOCKS_WITH_CANDIDATES && st.shield_like + st.unshield_like == 0 {
         bail!(
             "{} blocks came back without one transaction that mixes shielded and transparent data: this server leaves \
@@ -156,7 +156,7 @@ pub struct Resolved {
 pub async fn resolve<S: BlockSource>(src: &S, cands: &[Cand], cache: &RawCache, concurrency: usize) -> Result<Resolved> {
     let mut results = stream::iter(cands)
         .map(|c| async move {
-            // The server is not trusted (spec 41 A9): bytes count only if they hash to the id that was asked for.
+            // The server is not trusted: bytes count only if they hash to the id that was asked for.
             // A cached file gets the same test; one that fails is fetched again.
             let cached = cache.get(&c.txid)?.filter(|r| txid_of(r, c.h).is_ok_and(|id| id == c.txid));
             let cached_hit = cached.is_some();

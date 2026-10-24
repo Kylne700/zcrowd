@@ -9,7 +9,7 @@ T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 ok() { printf 'ok    %s\n' "$*"; }
 die() { printf 'FAIL  %s\n' "$*" >&2; exit 1; }
-# spec 41 A10: exactly one verdict line and one crowd line, whatever else is printed
+# the stable output contract: exactly one verdict line and one crowd line, whatever else is printed
 contract() {
   [ "$(grep -cE '^verdict: (NO MATCH|RED|AMBER|GREEN)( |$)' "$1")" -eq 1 ] || die "$2: not exactly one verdict line"
   [ "$(grep -cE '^crowd: k=[0-9]+ weighted=[0-9]+\.[0-9]( |$)' "$1")" -eq 1 ] || die "$2: not exactly one crowd line"
@@ -47,7 +47,7 @@ ok "offline sync from fixtures: 3 events, range ends at tip-10 (3522630), 3 of 3
 "$BIN" check --shield 15.01006756 --pool sapling --data "$T/s/flows.ndjson" >"$T/c0" 2>&1 || die "check on synced file"
 contract "$T/c0" "check --shield on synced file"
 grep -q '^crowd: k=1 weighted=1\.0 ' "$T/c0" && grep -q '^verdict: AMBER' "$T/c0" || die "check --shield 15.01006756 --pool sapling: expected k=1 (the one shield of that amount) AMBER"
-# spec 41 A11: one line per pool, the worst pool decides. 1.0 ZEC has no Sapling or Orchard crowd, 162 entries into Ironwood
+# one line per pool, the worst pool decides. 1.0 ZEC has no Sapling or Orchard crowd, 162 entries into Ironwood
 printf '1.0\n' | "$BIN" check --unshield - --data "$D" >"$T/c1" 2>&1 || die "check 1.0"
 contract "$T/c1" "check 1.0"
 grep -q '^pool sapling: k=0 weighted=0\.0 -> NO MATCH' "$T/c1" && grep -q '^pool orchard: k=0 weighted=0\.0 -> NO MATCH' "$T/c1" \
@@ -80,7 +80,7 @@ j = json.load(open(sys.argv[1]))
 assert (j["k"], j["weighted"], j["verdict"], j["pool"]) == (157, 114.5, "GREEN", "sapling"), j
 assert [(p["pool"], p["k"]) for p in j["pools"]] == [("sapling", 157), ("orchard", 0), ("ironwood", 592)], j["pools"]
 PY
-# research/43 S1-1: the send-max round trip through an Ironwood-only shield. 43bdcfaf... shielded 0.27967119 ZEC into Ironwood;
+# the review's false NO MATCH: the send-max round trip through an Ironwood-only shield. 43bdcfaf... shielded 0.27967119 ZEC into Ironwood;
 # unshielding it again with the 15000 zat fee gives 0.27952119 ZEC. The Ironwood-blind sample said NO MATCH for this amount.
 printf '0.27952119\n' | "$BIN" check --unshield - --data "$D" >"$T/c2r" 2>&1 || die "check 0.27952119"
 contract "$T/c2r" "check 0.27952119"

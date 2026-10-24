@@ -18,7 +18,7 @@ pub struct TxSummary {
     pub n_vout: usize,
     /// Any Sapling, Orchard or Ironwood part.
     pub shielded: bool,
-    /// Two or more of those pools are touched: a possible move between pools (spec 41 A11).
+    /// Two or more of those pools are touched: a possible move between pools.
     #[serde(default)]
     pub multi_pool: bool,
     pub coinbase: bool,
@@ -43,7 +43,7 @@ pub trait BlockSource {
     async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>>;
     /// Raw transaction bytes and the height it was mined at.
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)>;
-    /// True for a server: every requested height must come back, linked by block hashes (spec 41 A9).
+    /// True for a server: every requested height must come back, linked by block hashes.
     /// False for sparse fixtures.
     fn strict_chain(&self) -> bool {
         false
@@ -174,7 +174,7 @@ impl BlockSource for Lwd {
         let range = BlockRange {
             start: Some(BlockId { height: start, hash: vec![] }),
             end: Some(BlockId { height: end, hash: vec![] }),
-            // Every pool: an Ironwood-only transaction is invisible otherwise (spec 41 A11, research/43 S1-1).
+            // Every pool: an Ironwood-only transaction is invisible otherwise.
             pool_types: [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard, PoolType::Ironwood].map(|p| p as i32).to_vec(),
         };
         let mut stream = retry("get_block_range", || {

@@ -1,5 +1,5 @@
 //! Checks on the committed sample (fixtures/flows-sample.ndjson, made by `zcrowd sync` with all three shielded pools):
-//! the 20 transactions that research/44 compared with public explorers, and the false NO MATCH that research/43 S1-1
+//! the 20 transactions that were compared with public explorers, and the false NO MATCH that the review
 //! reproduced with Ironwood-only shields.
 use std::path::PathBuf;
 use zcrowd_core::crowd::{DEFAULT_FEE_ALLOWANCE, Params, Verdict, count, score, score_pools, worst};
@@ -15,15 +15,15 @@ fn params(now: u64) -> Params {
     Params { lookback_days: 30, tol_zat: 0, fee_allowance_zat: DEFAULT_FEE_ALLOWANCE, now }
 }
 
-// The 20 events of research/44 (read from two explorers on 2026-10-24 between 14:35 and 14:48 UTC: Cipherscan
+// The 20 events compared with explorers (read from two explorers on 2026-10-24 between 14:35 and 14:48 UTC: Cipherscan
 // api.mainnet.cipherscan.app/api/tx/<txid>, zcashexplorer.app, and Blockchair for the older ones). Before the Ironwood
 // fix 4 of them were wrong (#1, #6, #7, #9). `zat` is the explorer's amount for a plain event, and for the unshields
-// that leave two or three pools at once the sum of the leaving balances: spec 41 A11 keeps those as Low confidence
+// that leave two or three pools at once the sum of the leaving balances: the decoder keeps those as Low confidence
 // "multi-pool" events, which no crowd counts. #7 is the one deliberate difference: the explorer shows the net crossing
-// 12_272_904 (transparent input 12_297_904 minus the fee 25_000), A11 counts what arrives in the pool: Ironwood takes
+// 12_272_904 (transparent input 12_297_904 minus the fee 25_000), the decoder counts what arrives in the pool: Ironwood takes
 // 12_319_850 while Orchard pays out 46_946.
 #[test]
-fn the_twenty_events_of_research_44_decode_as_the_explorers_show() {
+fn the_twenty_explorer_checked_events_decode_as_the_explorers_show() {
     use Confidence::{High as H, Low as L};
     use Kind::{Shield as S, Unshield as U};
     use Pool::{Ironwood as I, Mixed as M, Orchard as O, Sapling as Sa};
@@ -58,7 +58,7 @@ fn the_twenty_events_of_research_44_decode_as_the_explorers_show() {
     }
 }
 
-// research/43 S1-1: with Ironwood missing from the data, `check --unshield` printed a false NO MATCH for the amount of a
+// The review's false NO MATCH: with Ironwood missing from the data, `check --unshield` printed a false NO MATCH for the amount of a
 // send-max round trip through an Ironwood-only shield (the reviewer's 40 shields of blocks 3528000..3528199, amount =
 // shield - 15_000). Every such shield must now be found in its own pool, and `any` (the worst pool) must not say NO MATCH.
 #[test]

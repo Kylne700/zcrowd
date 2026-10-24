@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Leak check for `zcrowd sync` over Tor, the default (spec 41 C7). Needs gcc, a built zcrowd and real network access, so it is
+# Leak check for `zcrowd sync` over Tor, the default. Needs gcc, a built zcrowd and real network access, so it is
 # not part of `cargo test`. Usage: tests/leakcheck/run.sh [path/to/zcrowd]   (default: target/debug/zcrowd)
 #  1. Calibration: a direct sync under the shim MUST log the server name and IP, else the shim sees nothing.
 #  2. A default sync (Tor, cold Tor dir) under the shim must log no lookup of the server, no connection to its IPs and

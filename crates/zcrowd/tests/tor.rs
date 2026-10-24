@@ -1,4 +1,4 @@
-//! Spec 41 C7: when Tor is selected and fails, sync stops loudly and never tries a direct connection.
+//! When Tor is selected and fails, sync stops loudly and never tries a direct connection.
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -86,7 +86,7 @@ fn tor_flags_conflict_and_offline_mode_never_starts_tor() {
     assert!(!d.join("tor").exists(), "fixtures mode must not create Tor state");
 }
 
-// C8: --end-height pins the range for repeatable runs but can never reach into the reorg margin.
+// --end-height pins the range for repeatable runs but can never reach into the reorg margin.
 #[test]
 fn end_height_pins_the_range_and_respects_the_reorg_margin() {
     let o = offline_sync(&["--end-height", "3522000"]);

@@ -39,7 +39,7 @@ fn run(args: &[&str], stdin: Option<&str>) -> (bool, String, String) {
     (o.status.success(), String::from_utf8_lossy(&o.stdout).into(), String::from_utf8_lossy(&o.stderr).into())
 }
 
-/// Spec 41 A10: exactly one `verdict: <NO MATCH|RED|AMBER|GREEN>` line and one `crowd: k=<n> weighted=<w>` line.
+/// The stable output contract: exactly one `verdict: <NO MATCH|RED|AMBER|GREEN>` line and one `crowd: k=<n> weighted=<w>` line.
 fn contract(out: &str) {
     let v: Vec<_> = out.lines().filter_map(|l| l.strip_prefix("verdict: ")).collect();
     assert_eq!(v.len(), 1, "{out}");
@@ -111,7 +111,7 @@ fn cli_check_shield_mode_and_address_reuse() {
     assert!(out.is_empty());
 }
 
-// Spec 41 A11: a crowd is the entries into ONE pool; `--pool any` (the default) shows every pool and the worst verdict.
+// A crowd is the entries into ONE pool; `--pool any` (the default) shows every pool and the worst verdict.
 #[test]
 fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
     // 1.00015 ZEC entered Sapling once, Orchard 3 times, Ironwood 12 times (4 of them as moves from another pool)
@@ -172,7 +172,7 @@ fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
     assert!(!ok && err.contains("--pool"), "{err}");
 }
 
-// Spec 41 C3: the process cuts its own network. A listener on loopback is reachable from this process
+// The process cuts its own network. A listener on loopback is reachable from this process
 // but not after the probe enters a fresh network namespace.
 #[test]
 fn sandbox_blocks_connections() {

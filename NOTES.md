@@ -1,6 +1,6 @@
 # zcrowd build notes (for the lead and the reviewers)
 
-Specs followed: `research/39-zecathon-design.md`, then `research/41-zcrowd-privacy-spec.md` (binding, overrides 39).
+The design and privacy specs these notes followed are not in this repository; what they require is in `docs/PRIVACY.md` and checked by `tests/audit.sh`.
 Everything below was run on this machine on 2026-10-24. Lines marked "recorded" were printed during the named stage and
 not re-run later. S1..S4b are history: they come from the first, Ironwood-blind sample (6,227 events), so their counts
 (events, `PARITY OK: 160`, crowd sizes) are not today's. Today's numbers are in "Ironwood stage" and in "Final run",
@@ -14,7 +14,7 @@ which is the output of `bash tests/e2e.sh` with LIVE=1 and PLAYWRIGHT_CORE set.
   `events=1406 shields=691 unshields=715 fetched_txs=1406 ... secs=40.8`; `verify 954c19b2...` MATCH. 30-day sync:
   `blocks=34705 txs=198933 shield_like=3156 (coinbase 0) unshield_like=3071 range=3494295..3528999 secs=9.5`,
   `events=6227 shields=3144 unshields=3083 fetched_txs=4821 cached_txs=1406 secs=139.6`.
-- S3 (scoring per spec 41). Recorded: `check --unshield 1.0` NO MATCH; `1.23456789` NO MATCH plus the odd-amount note;
+- S3 (scoring). Recorded: `check --unshield 1.0` NO MATCH; `1.23456789` NO MATCH plus the odd-amount note;
   `1.2497` crowd 157, weighted 114.5, GREEN; `1.2497 --to <an address that shielded 2026-10-19>` RED.
 - S4 (HTML report). Recorded: `unshare -rn target/debug/zcrowd check|report` exit 0; report 3.4 KB without external
   references.
@@ -22,25 +22,25 @@ which is the output of `bash tests/e2e.sh` with LIVE=1 and PLAYWRIGHT_CORE set.
   suite); identical k, weighted, verdict, suggestions` (7 of 8 deliberate JS mutations caught; the survivor is
   behaviour-equivalent); `HEADLESS OK` (http and file://: 1 request at load, 0 while typing, 5 CSP violations recorded
   for the injected attempts, the static server log shows only `GET /index.html`, storage empty).
-- S5 (A9, A10, audit, e2e, docs). Recorded: cross-check run once: one-day sync from `zec.rocks` and from `eu.zec.rocks` (range 3527732..3529028): byte-identical
+- S5 (integrity checks, stable output lines, audit, e2e, docs). Recorded: cross-check run once: one-day sync from `zec.rocks` and from `eu.zec.rocks` (range 3527732..3529028): byte-identical
   flows files (173 events). Mutation checks of the audit itself: a `fetch(` added to the page script -> P10 fails;
   the plain-text guard disabled -> P6 fails.
 
-## Ironwood stage (spec 41 A11; research/43 S1-1, S1-2, S1-3, S2-4, S3-2, S3-4)
+## Ironwood stage (findings S1-1, S1-2, S1-3, S2-4, S3-2, S3-4 of the independent review)
 
 Cause: the first `sync` did not ask for the third shielded pool, Ironwood (transaction v6), and the decoder did not read
-its value balance. Transactions through Ironwood were missing or showed another amount: research/44 found 4 of 20
-sampled events wrong (`91c68e50...`, `c292feb1...`, `48ca0a26...`, `ce7e196a...`), research/43 S1-1 a false NO MATCH.
+its value balance. Transactions through Ironwood were missing or showed another amount: an explorer cross-check found 4 of 20
+sampled events wrong (`91c68e50...`, `c292feb1...`, `48ca0a26...`, `ce7e196a...`), the review's finding S1-1 a false NO MATCH.
 
-Commits (all by the neutral identity, Sonnet 5.5 trailer):
+Commits (all by the neutral identity, Sonnet 5.5 trailer; subjects shortened):
 
 ```
-acfb52f Decode and fetch all three shielded pools (Ironwood), spec 41 A11 step 1
-6acb46f Score crowds per shielded pool, add check --pool (spec 41 A11 step 3)
+acfb52f Decode and fetch all three shielded pools (Ironwood), step 1
+6acb46f Score crowds per shielded pool, add check --pool, step 3
 27bb88f Apply rustfmt and fix one clippy lint in the pool-aware scoring code
 79be5c6 report: score each unshield against entries of about its amount only
-b3124d7 Re-sync the sample with all three shielded pools and test it against research/44
-2995ba7 Web demo: pick the pool, one line per pool, the worst pool decides (spec 41 A11)
+b3124d7 Re-sync the sample with all three shielded pools and test it against the explorer cross-check
+2995ba7 Web demo: pick the pool, one line per pool, the worst pool decides
 d5d3939 tests: e2e and audit expect the Ironwood-aware sample and the per-pool output
 ```
 
@@ -75,13 +75,13 @@ Before and after:
 | `report`: unshields of the last 14 days | 1,440 | 17,827 |
 | NO MATCH / RED / AMBER / GREEN | 828 (57.5%) / 253 (17.6%) / 211 (14.7%) / 148 (10.3%) | 3,642 (20.4%) / 1,405 (7.9%) / 2,561 (14.4%) / 10,219 (57.3%) |
 | `check --unshield 1.0` | NO MATCH | GREEN through Ironwood (k=162, weighted 112.0) |
-| research/44 events decoded as the explorers show | 16 of 20 | 20 of 20 (test `sample.rs`) |
+| the 20 explorer-checked events decoded as the explorers show | 16 of 20 | 20 of 20 (test `sample.rs`) |
 | JS-vs-Rust comparisons | 160 | 760 |
 
 Decisions:
 
-- Event #7 of research/44 (`48ca0a26...`): the explorer shows the net crossing 12,272,904, the data holds the Ironwood
-  shield 12,319,850. A11 counts what arrives in the pool, and Orchard pays out 46,946 in the same transaction. This is
+- Event #7 of the explorer cross-check (`48ca0a26...`): the explorer shows the net crossing 12,272,904, the data holds the Ironwood
+  shield 12,319,850. the decoder counts what arrives in the pool, and Orchard pays out 46,946 in the same transaction. This is
   the one deliberate difference; `--shield X` likewise means the amount that arrives in the pool (S2-4).
 - Of the 20 events, 13 decode as High events and 7 as Low "multi-pool" events (the explorer amount is then the sum of
   the leaving balances). Low events are kept, never counted in a crowd.
@@ -101,19 +101,19 @@ Decisions:
   reviewer's repro (40 shields of blocks 3528000..3528199) is a test over all 126 Ironwood shields of that range on the
   sample: none gives a false NO MATCH.
 
-The reviewer's exact 40 (research/43 S1-1: their saved probe output for blocks 3528000..3528048, read only) were
+The reviewer's exact 40 (finding S1-1: their saved probe output for blocks 3528000..3528048, read only) were
 replayed against the committed sample: all 40 are High Ironwood shields with the probe's amount, and `check --unshield
 <shield - 15000>` (default pool) gives AMBER 19, RED 15, GREEN 6, NO MATCH 0 (their run on the Ironwood-blind sample:
 NO MATCH 36, AMBER 3, RED 1). The probe itself was not run again; a test covers all 126 Ironwood shields of blocks
-3528000..3528199. Of the 20 events of research/44, 19 equal the explorer in kind, pool and amount; #7 has the explorer's
-direction and pool and the amount of A11 (see the first decision).
+3528000..3528199. Of the 20 explorer-checked events, 19 equal the explorer in kind, pool and amount; #7 has the explorer's
+direction and pool and the decoder's amount (see the first decision).
 
 Evidence by finding (`cargo test --workspace` runs every test named here; the e2e steps and the parity run are noted):
 
 | finding | where |
 |---|---|
 | S1-1 Ironwood data is fetched, no false NO MATCH | `decode_shield_into_ironwood_only`, `e11_ironwood_only_shield_is_counted`, `a_send_max_round_trip_through_an_ironwood_shield_is_never_a_false_no_match`, e2e round trip of `43bdcfaf...` |
-| S1-2 decode reads all three balances, books must close | `decode_two_pool_unshield_e14` (a57f5cd4... = 134,225,000), `decode_three_pool_unshield_1`, `decode_three_pool_unshield_6`, `decode_two_pool_unshield_9`, `numbers_that_do_not_close_are_refused_not_clamped`, `the_twenty_events_of_research_44_decode_as_the_explorers_show` |
+| S1-2 decode reads all three balances, books must close | `decode_two_pool_unshield_e14` (a57f5cd4... = 134,225,000), `decode_three_pool_unshield_1`, `decode_three_pool_unshield_6`, `decode_two_pool_unshield_9`, `numbers_that_do_not_close_are_refused_not_clamped`, `the_twenty_explorer_checked_events_decode_as_the_explorers_show` |
 | S1-3 one crowd per pool | `e12_other_pools_are_not_counted_and_any_is_the_worst_pool`, `worst_pool_order_and_ties`, `cli_check_pool_option_scores_one_pool_and_any_shows_the_worst`, e2e 125 ZEC (Sapling k=40, Ironwood NO MATCH), parity (every pool setting) |
 | S2-4 `--shield X` is what arrives in the pool | `decode_shield_into_ironwood_while_orchard_pays_in_7`, `shield_mode_counts_entries_into_the_chosen_pool_only`; help text, prompt, README and web label say "arrives in the shielded pool" |
 | S3-2 empty range is an error | `a_long_range_without_any_candidate_is_an_error` |
@@ -122,7 +122,7 @@ Evidence by finding (`cargo test --workspace` runs every test named here; the e2
 
 Left for the next stage, not touched: S1-4, S2-1, S2-2, S2-3, S3-1, S3-3, S3-5, S3-6, S3-7, S4.
 
-NOT VERIFIED in this stage: the five new fixtures were not compared with an explorer (the 20 events of research/44 were);
+NOT VERIFIED in this stage: the five new fixtures were not compared with an explorer (the 20 explorer-checked events were);
 the server's version or pool support is not read, so a server that leaves out only one pool is not detected; Firefox and
 Safari; a 30-day sync over Tor.
 
@@ -169,35 +169,35 @@ E2E OK
 `PLAYWRIGHT_CORE=<playwright-core dir> LIVE=1 bash tests/audit.sh` alone: `AUDIT OK`, exit code 0, 161 s, no `SKIP` line.
 Not run in this stage: the audit with a mutated page or guard (done once in S5, recorded above), Firefox, Safari.
 
-## Deviations from the specs (and why)
+## Deviations from the first design (and why)
 
-1. `--unshield 1.23456789` prints NO MATCH plus the odd-amount note, not RED (spec 39 check; spec 41 A4 made odd amounts a
-   note and A2 made k = 0 a NO MATCH).
-2. `verify` is fully offline from the raw cache (spec 41 C2) instead of fetching the transaction online (spec 39).
+1. `--unshield 1.23456789` prints NO MATCH plus the odd-amount note, not RED (the first design said RED; the privacy spec made odd amounts a
+   note and k = 0 a NO MATCH).
+2. `verify` is fully offline from the raw cache instead of fetching the transaction online (the first design).
 3. Unshield `zat` is the net pool decrease (fee included). `fee_zat` is stored only when the transaction has no
    transparent inputs (otherwise it cannot be known exactly). The scorer subtracts a known fee.
 4. `now` for scoring is the data's newest block time (coverage `last_t`), not the wall clock; the wall clock only drives
    the stale-data warnings. This keeps results reproducible on the committed sample.
 5. Coinbase-to-shielded transactions are counted as shields and flagged `coinbase` (detected as the first transaction of
    a block, `CompactTx.index == 0`). Low confidence ("multi-pool", pool Mixed) is used for transactions that cross or move
-   value in more than one shielded pool without being a plain shield, unshield or move (spec 41 A11). Transactions that
+   value in more than one shielded pool without being a plain shield, unshield or move. Transactions that
    cannot be decoded or whose books do not close are counted by reason in the `sync` output, never silently dropped
    (before the Ironwood stage the first sentence said no coinbase occurred and Low was only for opposite-sign
    transactions: that was the Ironwood-blind sample).
-6. Suggestions offer only amounts that shields actually used; "split into chunks" advice was skipped (spec 41 A7 warns
-   against it).
-7. `--json` omits the typed amount and address. `--amount-stdin` (spec 39) is replaced by `--unshield -` / no value
-   (spec 41 C4).
+6. Suggestions offer only amounts that shields actually used; "split into chunks" advice was skipped (chunks sent at the same time or to one
+   address would link to each other).
+7. `--json` omits the typed amount and address. `--amount-stdin` of the first design is replaced by `--unshield -` / no value
+   (so the amount stays out of shell history).
 8. Coverage is stored in a sidecar `<data>.meta.json`; if a new sync leaves a gap to the old range, the old data is
    dropped (a gap would make NO MATCH untrue).
 9. The offline fixtures are 5 block summaries (heights 3520931, 3520943, 3520949, 3522616, 3522640) and 14 raw
    transactions in `fixtures/raw/` (4 sit behind those blocks; the other 10 are decode tests, among them 5 added in the
    Ironwood stage). The last block is padding so that tip - 10 keeps the others. The hidden `fixture` dev command that
    fetched them was used once and deleted. The sample (`flows-sample.ndjson`) contains public transparent addresses.
-10. Web demo is a JS port, not WASM, so `'wasm-unsafe-eval'` is dropped from the CSP. The data is inlined (spec 41 D1
-    supersedes spec 39's "fetch a data file"). It has no `--to` support.
-11. Spec 39 checklist item 4 (`mnemonic|seed|ufvk|viewing|address` in `crates/`) is narrowed to
-    `mnemonic|seed|ufvk|viewing`, because spec 41 B stores and accepts addresses on purpose.
+10. Web demo is a JS port, not WASM, so `'wasm-unsafe-eval'` is dropped from the CSP. The data is inlined (the privacy spec
+    preferred it to a "fetch a data file", which needs a network permission the page must not have). It has no `--to` support.
+11. The audit's secret-word grep (`mnemonic|seed|ufvk|viewing|address` in `crates/`) is narrowed to
+    `mnemonic|seed|ufvk|viewing`, because zcrowd stores and accepts addresses on purpose.
 12. The report gained a table of how the unshields of the last 14 days score (the number in the README).
 13. E10 hand check: the three fixture transactions were compared with the Blockchair API on 2026-10-24 (in the test
     comments).
@@ -205,14 +205,14 @@ Not run in this stage: the audit with a mutated page or guard (done once in S5, 
 15. New, beyond the spec (found while testing): tonic silently sends plain-text HTTP/2 for an `http://` URL even with a
     TLS config. `require_tls` (in `crates/zcrowd-core/src/source.rs`) refuses `http://` unless the host is `localhost`
     or a loopback IP. Test `plain_text_only_to_this_machine`; the audit runs the refusal with the network removed.
-16. A9 (spec 41): transaction ids are recomputed (ZIP-244 / legacy) and mismatches dropped and counted; the block hash
+16. The server is not trusted: transaction ids are recomputed (ZIP-244 / legacy) and mismatches dropped and counted; the block hash
     chain is checked only on the network path (`BlockSource::strict_chain`; the offline fixtures are single blocks).
     `BlockSummary` gained optional `hash` / `prev_hash` fields (old fixtures still load). `sync` prints an `integrity:`
     line.
-17. A10 (spec 41): the `crowd:` line is `crowd: k=<n> weighted=<w>` followed by an explanation in parentheses. The web
+17. Stable output: the `crowd:` line is `crowd: k=<n> weighted=<w>` followed by an explanation in parentheses. The web
     parity test uses `check --json` as its stable format; the text contract is asserted in `crates/zcrowd/tests/cli.rs`
     and `tests/e2e.sh`.
-18. Audit differs from the spec-39 list: it numbers claims P1..P11 (docs/PRIVACY.md), adds "no file is created by
+18. The audit numbers claims P1..P11 (docs/PRIVACY.md), adds "no file is created by
     `check`" (stamp-file test), a leak-detector canary, and runs the plain-text refusal under `unshare -rn`.
 19. Commit trailers: S1..S3 carry the Opus 5.5 co-author trailer, S4 onward the Sonnet 5.5 one (instruction changed
     between stages). Author and committer are the neutral identity in every commit; no remote exists.
@@ -260,7 +260,7 @@ Not run in this stage: the audit with a mutated page or guard (done once in S5, 
 - The sample goes stale: after 2026-10-24 about 15:05 UTC `check` on it prints stale-data warnings (the README says so).
 - `data/` (1.5 GB on disk, 67,977 raw transactions plus the events file, gitignored) from the 30-day sync is left in
   the working tree, and `target/debug/zcrowd` is a fresh build for the video agent.
-- Verdict wording follows spec 41; the README never says "linked" or "deanonymised" about the sample: it says "exactly
+- The README never says "linked" or "deanonymised" about the sample: it says "exactly
   one earlier shield of about that amount in the 14 days before".
 - Review hints: `crates/zcrowd-core/src/ingest.rs` (`link`, `resolve`), `source.rs` (`require_tls`, `Lwd::try_one`),
   `decode.rs` (`txid_of`, net-crossing logic), `crowd.rs` (bounds and weights).

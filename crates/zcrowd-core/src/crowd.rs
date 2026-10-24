@@ -1,4 +1,4 @@
-//! Amount-and-timing crowd scoring (spec 41 A1-A5, A11, B2).
+//! Amount-and-timing crowd scoring, per shielded pool.
 //!
 //! Adversary model: an observer matches an unshield to earlier entries into the same shielded pool by amount,
 //! allowing for the fee, and weighs recent matches more. This is a heuristic; it says nothing about graph, wallet
@@ -51,7 +51,7 @@ pub struct Crowd {
     pub matches: Vec<Event>,
 }
 
-/// An entry into `pool` (spec 41 A11): a High-confidence shield (a shielded coinbase included) or move whose pool is
+/// An entry into `pool`: a High-confidence shield (a shielded coinbase included) or move whose pool is
 /// `pool`, inside the lookback window and the amount window. Low-confidence multi-pool events are never entries.
 pub(crate) fn in_scope(e: &Event, user: Kind, pool: Pool, zat: u64, p: &Params) -> bool {
     let (lo, hi) = bounds(user, zat, p);
@@ -114,7 +114,7 @@ pub fn worse(a: Verdict, b: Verdict) -> Verdict {
     if rank(b) > rank(a) { b } else { a }
 }
 
-/// The pool with the worst verdict (spec 41 A11, `--pool any`). A tie goes to the smaller weighted crowd, then to the
+/// The pool with the worst verdict (`--pool any`). A tie goes to the smaller weighted crowd, then to the
 /// pool listed first in `Pool::SINGLE`. web/index.template.html does the same.
 pub fn worst(crowds: &[Crowd; 3]) -> &Crowd {
     crowds.iter().skip(1).fold(&crowds[0], |a, b| {
@@ -292,7 +292,7 @@ mod tests {
         score_pools(evs, user, zat, &p(0)).iter().map(|c| (c.pool, c.k, c.verdict)).collect()
     }
 
-    // E11: a shield whose only shielded part is Ironwood is an entry into Ironwood (it was invisible before A11).
+    // E11: a shield whose only shielded part is Ironwood is an entry into Ironwood (it was invisible while only Sapling and Orchard were decoded).
     #[test]
     fn e11_ironwood_only_shield_is_counted() {
         let evs = vec![ev_in(Kind::Shield, Pool::Ironwood, X + 15_000, NOW - 3600)];

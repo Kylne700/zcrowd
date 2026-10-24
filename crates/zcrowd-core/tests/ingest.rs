@@ -27,7 +27,7 @@ async fn fixture_source_gives_candidates_and_events_offline() {
     assert_eq!((r2.fetched, r2.from_cache), (0, c.len()));
 }
 
-// Spec 41 C1: the requests a sync makes depend only on the block range (and on which transactions the
+// The requests a sync makes depend only on the block range (and on which transactions the
 // chain shows in it), never on anything the user typed, because sync takes no user input at all.
 #[tokio::test]
 async fn sync_requests_depend_only_on_range() {
@@ -47,7 +47,7 @@ async fn sync_requests_depend_only_on_range() {
     assert_eq!(txs, ca.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
-// ---- spec 41 A9: the server is not trusted ----
+// ---- the server is not trusted ----
 
 type Rewrite = Box<dyn Fn(&str, Vec<u8>) -> Vec<u8> + Sync>;
 
@@ -107,7 +107,7 @@ fn tx(id: u64, n_vin: usize, n_vout: usize, shielded: bool, multi_pool: bool, co
     TxSummary { txid: format!("{id:064x}"), n_vin, n_vout, shielded, multi_pool, coinbase }
 }
 
-/// Every block carries one shield-like transaction: a long range with none is refused (research/43 S3-2).
+/// Every block carries one shield-like transaction: a long range with none is refused.
 fn chain(from: u64, n: u64) -> Chain {
     let hash = |h: u64| format!("{h:064x}");
     Chain(
@@ -179,7 +179,7 @@ async fn block_chain_is_checked_across_request_chunks() {
     assert!(crawl_err(&c, start, end).await.contains("block 12000 does not follow block 11999"));
 }
 
-// Spec 41 A11 / S3-4: what the compact block says decides which transactions are fetched in full.
+// What the compact block says decides which transactions are fetched in full.
 #[tokio::test]
 async fn candidate_kinds_cover_coinbase_and_moves() {
     let txs = vec![
@@ -199,7 +199,7 @@ async fn candidate_kinds_cover_coinbase_and_moves() {
     assert_eq!((st.shield_like, st.coinbase_like, st.unshield_like, st.move_like, st.txs), (3, 1, 1, 1, 7));
 }
 
-// Research/43 S3-2: a server that leaves pool data out must not look like a quiet month.
+// A server that leaves pool data out must not look like a quiet month.
 #[tokio::test]
 async fn a_long_range_without_any_candidate_is_an_error() {
     let quiet = |n: u64| {

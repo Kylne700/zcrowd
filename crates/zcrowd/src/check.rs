@@ -161,7 +161,7 @@ pub fn run(a: Args) -> Result<()> {
             println!("pool {}: k={} weighted={:.1} -> {}", o.pool.name(), o.k, o.weighted, o.verdict);
         }
     }
-    // stable line (spec 41 A10): `crowd: k=<n> weighted=<w>`, explanation after it
+    // stable line, read by scripts and the web parity test: `crowd: k=<n> weighted=<w>`, explanation after it
     println!(
         "crowd: k={} weighted={:.1} (pool {}{}: {other}; entries older than 14 days count half)",
         c.k,

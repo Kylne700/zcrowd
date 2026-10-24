@@ -1,4 +1,4 @@
-//! Cut this process off from the network before it touches any user input (spec 41 C3).
+//! Cut this process off from the network before it touches any user input.
 //! `check`, `report` and `verify` have no network code; this makes that a property of the process,
 //! not just of the source. Must run before any thread exists, so it is the first thing `main` does.
 

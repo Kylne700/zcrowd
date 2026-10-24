@@ -34,7 +34,7 @@ fn decode_unshield() {
 }
 
 // Shield with transparent change (same API): inputs 344666796, change output 36651796, fee 15000,
-// shielded_value_delta 308000000 = 344666796 - 36651796 - 15000. Must count as an exact shield (spec 41 A5).
+// shielded_value_delta 308000000 = 344666796 - 36651796 - 15000. Must count as an exact shield.
 #[test]
 fn decode_shield_with_transparent_change() {
     let e = ev("a7600a4c8401c310c86e95b08c4bcccf1ecce717ab97a6cfecf1041043718c24", 3522616);
@@ -42,7 +42,7 @@ fn decode_shield_with_transparent_change() {
 }
 
 // A real Sapling -> Ironwood move with no transparent part: Sapling pays out 100_020_000, Ironwood takes 100_000_000,
-// fee 20_000 (spec 41 A11, test E13). Decoded from the raw bytes only; no explorer was consulted for this one.
+// fee 20_000 (test E13). Decoded from the raw bytes only; no explorer was consulted for this one.
 // The old decoder produced no event for a transaction without a transparent bundle.
 #[test]
 fn decode_move_into_ironwood() {
@@ -51,7 +51,7 @@ fn decode_move_into_ironwood() {
     assert!((e.n_tin, e.n_tout) == (0, 0) && e.src.is_empty() && e.dst.is_empty());
 }
 
-// E10: the four events that research/44 found wrong, and E14, decoded from the raw bytes (fixtures/raw).
+// E10: the four events that an explorer cross-check found wrong, and E14, decoded from the raw bytes (fixtures/raw).
 // Per-pool balances and fees were read on 2026-10-24 between 14:35 and 14:48 UTC from two explorers: Cipherscan
 // (api.mainnet.cipherscan.app/api/tx/<txid>, primary) and zcashexplorer.app. The old decoder saw Sapling and Orchard
 // only, so it reported the Orchard share alone (or nothing) and a fee of 0.
@@ -80,7 +80,7 @@ fn decode_two_pool_unshield_9() {
     low_multi_pool_unshield("ce7e196a8d6ab7d855f8eac4d9d53a8c207f42e9f6ba8d1d66e7587e40eaa751", 3521263, 4_025_000, 25_000);
 }
 
-// E14 (spec 41 A11): Orchard 225_000 + Ironwood 134_000_000 leave, t_out 134_200_000, so the fee is 25_000. The old
+// E14: Orchard 225_000 + Ironwood 134_000_000 leave, t_out 134_200_000, so the fee is 25_000. The old
 // decoder reported an Orchard unshield of 225_000 with fee 0.
 #[test]
 fn decode_two_pool_unshield_e14() {
@@ -88,7 +88,7 @@ fn decode_two_pool_unshield_e14() {
 }
 
 // #7: one transparent input of 12_297_904, no transparent output, explorer fee 25_000. Ironwood takes 12_319_850 and
-// Orchard pays out 46_946. The explorer shows the net crossing (12_272_904 = 12_297_904 - 25_000). Spec 41 A11 counts
+// Orchard pays out 46_946. The explorer shows the net crossing (12_272_904 = 12_297_904 - 25_000). The decoder counts
 // the value that arrives in the pool: a High shield into Ironwood of 12_319_850, with no fee (the input is not in the
 // transaction), which is what a later unshield from Ironwood would have to match.
 #[test]
@@ -141,7 +141,7 @@ fn skip(txid: &str, h: u64) -> zcrowd_core::decode::Skip {
     }
 }
 
-// The first transaction of the false NO MATCH of research/43 S1-1: two transparent inputs, one transparent change
+// The first transaction of the false NO MATCH of the review (Ironwood-only shields): two transparent inputs, one transparent change
 // output, and all the shielded value arrives in Ironwood (no Sapling or Orchard part at all). The old decoder saw no
 // pool here. The amount comes from the balances; it was NOT compared with a public explorer.
 #[test]
@@ -159,7 +159,7 @@ fn decode_unshield_from_ironwood_only() {
     assert_eq!((e.n_tin, e.n_tout), (0, 1));
 }
 
-// Coinbase paid to a shielded address (spec 41 A11 / E15): a High shield into Ironwood, flagged as coinbase.
+// Coinbase paid to a shielded address (E15): a High shield into Ironwood, flagged as coinbase.
 #[test]
 fn decode_coinbase_shield_into_ironwood() {
     let e = ev("6262a45c8455ce5a5b148b1a48ca13c3e32dfc052c50ccda7fcbc8d5f26e2445", 3499538);

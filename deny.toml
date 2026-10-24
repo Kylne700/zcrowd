@@ -1,0 +1,47 @@
+# cargo-deny policy for zcrowd. CI runs `cargo deny --locked check` in the job "deny".
+# Checked against every target in Cargo.lock (Linux, macOS and Windows), not only the host.
+
+[advisories]
+# Any RustSec advisory, unmaintained or yanked crate fails the check unless it is listed below with a reason.
+yanked = "deny"
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (no vulnerability). It is a proc-macro, so it runs at build time and adds no code to the binary; it is reached only through arti (pwd-grp, fs-mistrust). Revisit when arti or zcash_client_backend update." },
+  { id = "RUSTSEC-2023-0071", reason = "rsa: timing side channel (Marvin) in RSA private-key operations, no fixed release. Reached only through arti (tor-llcrypto, tor-key-forge). The lockfile has no tor-hsservice or relay crate and tor-proto is built without its relay feature, so this client only verifies relays' RSA identity signatures with public keys and holds no RSA private key. Revisit when arti updates." },
+]
+
+[licenses]
+# Only what the dependency tree needs (checked with `cargo deny list`). A crate passes when its SPDX expression is satisfied,
+# so an "MIT OR Apache-2.0" crate needs only one of them.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",   # icu_* (unicode data)
+  "Zlib",          # foldhash
+  "Unlicense",     # async_executors
+  "CC0-1.0",       # secp256k1, notify
+  "CDLA-Permissive-2.0", # webpki-roots (certificate data)
+  "MPL-2.0",       # option-ext (file-level copyleft; it is not modified here)
+]
+
+[bans]
+multiple-versions = "warn"
+# "deny" would fail on zcrowd -> zcrowd-core, a path dependency without a version, because the crates are not marked publish = false
+wildcards = "warn"
+deny = [
+  # TLS is rustls with ring. No system OpenSSL or Schannel/SecureTransport binding: the release binaries must not depend on the
+  # libraries of the machine that built them.
+  { crate = "openssl" },
+  { crate = "openssl-sys" },
+  { crate = "native-tls" },
+  { crate = "aws-lc-rs" },
+  { crate = "aws-lc-sys" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

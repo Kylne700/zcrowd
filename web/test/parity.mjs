@@ -1,5 +1,5 @@
-// Parity: the script shipped in web/index.html must give the same crowd, verdict, pools and suggestions as the Rust CLI,
-// for every --pool setting.
+// Parity: the script shipped in web/index.html must give the same crowd, verdict, pools, suggestions and the same ten matches
+// in the same order (newest first, ties by txid) as the Rust CLI, for every --pool setting.
 // Usage: cargo build -p zcrowd && node web/test/parity.mjs   (ZCROWD_BIN overrides the binary path)
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -8,7 +8,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { pageData, render } from "../build.mjs";
+import { pageData, pageEntries, render } from "../build.mjs";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const BIN = process.env.ZCROWD_BIN ?? path.join(ROOT, "target/debug/zcrowd");
@@ -24,7 +24,7 @@ const sampleCov = JSON.parse(read(path.join(ROOT, "fixtures/flows-sample.meta.js
 // The file under test must be the one the build produces from the template and the committed sample.
 assert.equal(shipped, render(template, pageData(sampleEvents, sampleCov)), "web/index.html is stale: run node web/build.mjs");
 
-function load(html) {
+function load(html, events) {
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   assert.equal(scripts.length, 1, "exactly one inline script");
   const ctx = vm.createContext({}); // no document: only the scoring part of the script runs
@@ -32,7 +32,8 @@ function load(html) {
   const ev = (code) => vm.runInContext(code, ctx);
   const plain = (x) => JSON.parse(JSON.stringify(x)); // drop the other realm's prototypes
   const [parse, check] = [ev("parseZec"), ev("check")];
-  return { parse, check: (...a) => plain(check(...a)), now: ev("NOW") };
+  const order = pageEntries(events).map((e) => e.txid); // the page keeps no txids, only each match's rank in this list
+  return { parse, check: (...a) => plain(check(...a)), now: ev("NOW"), txids: (r) => r.matches.map((m) => order[m.rank]) };
 }
 
 function cli(data, mode, amount, c) {
@@ -46,13 +47,15 @@ function cli(data, mode, amount, c) {
 }
 
 let compared = 0;
+const ties = { sample: 0, synthetic: 0 }; // comparisons whose listed matches include two with the same time
 function same(page, data, label, mode, amount, c = {}) {
   const want = cli(data, mode, amount, c);
   assert.ok(want, `${label}: the CLI rejected a valid amount ${amount}`);
   const got = page.check(mode, page.parse(amount), { lookback: c.look ?? 30, tol: c.tol ?? 0, fee: c.fee ?? 50000, now: page.now }, c.pool ?? "any");
   const view = (r, matches) => ({ pool: r.pool, k: r.k, weighted: r.weighted, verdict: r.verdict, odd_amount: r.odd_amount, matches, pools: r.pools, other_pools_k: r.other_pools_k, suggestions: r.suggestions });
-  assert.deepStrictEqual(view(got, got.matches.length), view(want, want.matches.length), `${label}: ${mode} ${amount} ${JSON.stringify(c)}`);
+  assert.deepStrictEqual(view(got, page.txids(got)), view(want, want.matches), `${label}: ${mode} ${amount} ${JSON.stringify(c)}`);
   compared++;
+  if (got.matches.some((m, i) => i > 0 && m.t === got.matches[i - 1].t)) ties[label === "synthetic" ? label : "sample"]++;
   return got;
 }
 
@@ -61,7 +64,7 @@ const POOLS = ["sapling", "orchard", "ironwood"];
 const POOL_SETTINGS = ["any", ...POOLS];
 
 // ---- 1. the real sample ----
-const page = load(shipped);
+const page = load(shipped, sampleEvents);
 let amounts = 0;
 for (const pool of POOL_SETTINGS) {
   for (const a of ["1.0", "1.23456789", "1.2497", "1.24985", "1.25", "2.5", "0.001", "125", "5", "0.0001", "100", "3.74975", "4.9997", "1.", ".5", " 007.50 ", "21000000", "0.00000001", "1.00015", "0.01015", "49.99999999"]) {
@@ -103,6 +106,7 @@ for (const pool of POOLS) {
   amounts += 12;
 }
 assert.ok(edgePools >= 2, "the sample has isolated entries in fewer than two pools");
+assert.ok(ties.sample > 0, "no sample comparison listed two matches of the same time: the txid tie-break is not tested on real data");
 
 // ---- 2. inputs the parser must reject (Rust and JS alike) ----
 const invalid = ["1e3", "+1", "1,5", "1 2", "0", "0.0", "21000000.00000001", "21000001", "1.123456789", "abc", "", ".", " ", "1.2.3", "-1", "0x10", "١٢٣", "１２", "1_000", "1 2"];
@@ -129,6 +133,10 @@ for (let i = 0; i < 5; i++) { synth.push(ev("unshield", zec(50), T - i * 3600));
 synth.push(ev("shield", zec(60), T - 3600));
 for (const a of [60.5, 59.5, 60.4]) for (let i = 0; i < 3; i++) synth.push(ev("shield", zec(a), T - 7200 - i)); // equal crowds: closer first, then smaller
 synth.push(ev("shield", zec(70), T - 100, { coinbase: true })); // coinbase shields count
+// 15 entries of one amount in the same second, txids descending (the data order is not the txid order): the ten listed are
+// picked by txid, as crowd.rs does
+const tied = [];
+for (let j = 0; j < 15; j++) { const e = ev("shield", zec(90), T - 2 * DAY, { txid: (0xabcdef - j).toString(16).padStart(64, "0") }); tied.push(e.txid); synth.push(e); }
 // several pools: 25 ZEC entered Sapling once, Orchard 4 times (one a coinbase), Ironwood 11 times (5 of them moves from another pool)
 const into = (pool, kind, zat, i, extra = {}) => ev(kind, zat, T - i * 3600, { pool, ...extra });
 synth.push(into("sapling", "shield", zec(25), 0));
@@ -146,10 +154,10 @@ try {
   const file = path.join(dir, "synth.ndjson");
   fs.writeFileSync(file, synth.map((e) => JSON.stringify(e)).join("\n") + "\n");
   fs.writeFileSync(path.join(dir, "synth.meta.json"), JSON.stringify(cov));
-  const sp = load(render(template, pageData(synth, cov)));
-  const k = { 10: 4, 20: 10, 30: 9, 40: 20, 50: 0, 60: 1, 70: 1, 80: 0 }; // Sapling only
+  const sp = load(render(template, pageData(synth, cov)), synth);
+  const k = { 10: 4, 20: 10, 30: 9, 40: 20, 50: 0, 60: 1, 70: 1, 80: 0, 90: 15 }; // Sapling only
   const P = { lookback: 30, tol: 0, fee: 50000, now: T };
-  for (const a of [10, 20, 30, 40, 40.5, 50, 60, 70, 80, 25, 26, 27]) {
+  for (const a of [10, 20, 30, 40, 40.5, 50, 60, 70, 80, 90, 25, 26, 27]) {
     for (const pool of POOL_SETTINGS) {
       for (const mode of ["unshield", "shield"]) {
         for (const c of [{}, { look: 7 }, { look: 14 }, { tol: zec(0.5) }, { fee: 0 }, { tol: 3, fee: 1 }]) {
@@ -159,6 +167,9 @@ try {
       }
     }
   }
+  const smallest = [...tied].sort().slice(0, 10);
+  assert.deepEqual(sp.txids(sp.check("unshield", zec(90), P, "sapling")), smallest);
+  assert.notDeepEqual(tied.slice(0, 10), smallest, "the tied txids are in data order: the test cannot tell the tie-break from the data order");
   assert.deepEqual(sp.check("unshield", zec(60), P, "sapling").suggestions.map((s) => s.zat), [zec(60.4), zec(59.5), zec(60.5)]);
   assert.equal(sp.check("unshield", zec(20), P, "sapling").verdict, "GREEN");
   assert.equal(sp.check("unshield", zec(30), P, "sapling").verdict, "AMBER");
@@ -176,5 +187,6 @@ try {
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }
+assert.ok(ties.synthetic > 0, "no synthetic comparison listed two matches of the same time");
 
-console.log(`PARITY OK: ${compared} JS-vs-Rust comparisons (${amounts} sample amounts, ${invalid.length} rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions`);
+console.log(`PARITY OK: ${compared} JS-vs-Rust comparisons (${amounts} sample amounts, ${invalid.length} rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (${ties.sample} sample and ${ties.synthetic} synthetic comparisons with a time tie)`);

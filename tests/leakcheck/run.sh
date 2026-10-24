@@ -48,7 +48,7 @@ sync tor --tor-dir "$work/tordir" --end-height "$end" || { echo "Tor sync failed
 fetched=$(sed -n 's/^events=.* fetched_txs=\([0-9]*\) .*/\1/p' "$work/tor.out")
 [ "${fetched:-0}" -ge 1 ] || { echo "the Tor sync fetched no transaction, so it did not use every kind of request"; exit 2; }
 t_all=$(lookups tor) t_look=$(server_lookups tor) t_ip=$(server_ips tor) t_53=$(port53 tor)
-echo "Tor sync (tip, blocks and $fetched transactions fetched; the rest from the cache): lookups (any name)=$t_all, lookups of the server name=$t_look, connects to server IPs=$t_ip, port-53 sends=$t_53, distinct connect destinations (Tor relays)=$(dests tor)"
+echo "Tor sync: lookups (any name)=$t_all, lookups of the server name=$t_look, connects to server IPs=$t_ip, port-53 sends=$t_53, distinct connect destinations (Tor relays)=$(dests tor); through Tor: the tip, every block and $fetched transactions"
 if [ "$t_look" -ne 0 ] || [ "$t_ip" -ne 0 ] || [ "$t_53" -ne 0 ]; then echo "LEAKCHECK FAILED"; exit 1; fi
 
 # Same range, same bytes: Tor changes the route, not the data.

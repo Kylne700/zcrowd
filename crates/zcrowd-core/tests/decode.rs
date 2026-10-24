@@ -222,6 +222,34 @@ fn a_unified_address_without_a_transparent_receiver_says_it_does_not_leave_the_s
     assert_eq!(destination(&damaged).unwrap_err().to_string(), "not a Zcash address");
 }
 
+// BIP 350: Bech32m is all-lowercase or all-uppercase (QR codes), never mixed. The Rust crate alone takes lowercase only, so a
+// Unified Address in capitals needs the same care as a TEX one.
+#[test]
+fn a_unified_address_in_capitals_is_accepted_but_mixed_case_is_not() {
+    use zcrowd_core::decode::{Dest, NO_TRANSPARENT_RECEIVER, Via, destination, p2pkh};
+    let cases = [
+        (unified::Revision::R0, vec![Receiver::Orchard([2; 43]), Receiver::P2pkh([7; 20])], "u1", true),
+        (unified::Revision::R2, vec![Receiver::P2pkh([7; 20])], "tu1", false),
+    ];
+    for (rev, receivers, prefix, shielded) in cases {
+        let ua = unified(rev, NetworkType::Main, receivers);
+        assert!(ua.starts_with(prefix), "{ua}");
+        let want = Dest { taddr: p2pkh([7; 20]), via: Via::Unified { shielded } };
+        assert_eq!(destination(&ua).unwrap(), want);
+        assert_eq!(destination(&ua.to_uppercase()).unwrap(), want);
+        assert_eq!(destination(&format!(" {}\n", ua.to_uppercase())).unwrap(), want);
+        // mixed case: a capital first letter, or every other character in capitals
+        let first = format!("{}{}", ua[..1].to_uppercase(), &ua[1..]);
+        let half: String = ua.chars().enumerate().map(|(i, c)| if i % 2 == 0 { c.to_ascii_uppercase() } else { c }).collect();
+        for mixed in [first, half] {
+            assert_eq!(destination(&mixed).unwrap_err().to_string(), "not a Zcash address", "{mixed}");
+        }
+    }
+    // the reason for refusing one is given for capitals too
+    let shielded_only = unified(unified::Revision::R0, NetworkType::Main, vec![Receiver::Sapling([1; 43])]);
+    assert_eq!(destination(&shielded_only.to_uppercase()).unwrap_err().to_string(), NO_TRANSPARENT_RECEIVER);
+}
+
 fn skip(txid: &str, h: u64) -> zcrowd_core::decode::Skip {
     match event_from_tx(&raw(txid), h, 1).unwrap() {
         Decoded::Skip(s) => s,

@@ -281,14 +281,16 @@ impl TryFromAddress for Dest {
     }
 }
 
-/// The transparent address behind what was typed after `--to`: a mainnet t1/t3/tex1 address (tex1 maps to its P2PKH hash,
-/// in all-lowercase or all-uppercase as Bech32m allows), or the transparent receiver of a mainnet Unified Address.
-/// Other shielded or non-mainnet addresses are rejected: zcrowd only compares transparent addresses.
+/// The transparent address behind what was typed after `--to`: a mainnet t1/t3/tex1 address (tex1 maps to its P2PKH hash), or
+/// the transparent receiver of a mainnet Unified Address. tex1 and Unified Addresses are Bech32m: all-lowercase or
+/// all-uppercase (QR codes) is accepted, mixed case is not. Other shielded or non-mainnet addresses are rejected: zcrowd only
+/// compares transparent addresses.
 pub fn destination(s: &str) -> Result<Dest> {
     let s = s.trim();
-    // Base58 t1/t3 addresses are case-sensitive and stay so; only a TEX address may be written in capitals.
+    // The Rust crate decodes lowercase Bech32m only. A Base58 t1/t3 address always holds its lowercase `t`, so a string
+    // without a lowercase letter is never one: lowercasing it cannot turn a case-sensitive address into another.
     let lower;
-    let s = if s.starts_with("TEX1") && !s.bytes().any(|b| b.is_ascii_lowercase()) {
+    let s = if !s.bytes().any(|b| b.is_ascii_lowercase()) {
         lower = s.to_ascii_lowercase();
         &lower
     } else {

@@ -194,6 +194,21 @@ fn a_unified_address_is_checked_through_its_transparent_receiver_and_never_print
         assert!(err.contains("this Unified Address has no transparent receiver: sending to it does not leave the shielded pools"), "{err}");
         assert!(!err.contains(ua.as_str()), "{err}");
     }
+    // Bech32m may be written in capitals (QR codes): a Unified Address in capitals is checked like the lowercase one, mixed
+    // case is refused, and neither the capitals nor the lowercase form is printed back
+    for ua in [&with_both, &t_only] {
+        let upper = ua.to_uppercase();
+        let (ok, out, err) = run(&args, Some(&format!("1\n{upper}\n")));
+        assert!(ok && out.contains("address: RED") && out.contains("note: --to is a Unified Address"), "{out}{err}");
+        let (_, js, _) = run(&[&args[..], &["--json"]].concat(), Some(&format!("1\n{upper}\n")));
+        assert!(js.contains(r#""address_verdict":"RED""#), "{js}");
+        let mixed = format!("{}{}", ua[..1].to_uppercase(), &ua[1..]);
+        let (ok_m, out_m, err_m) = run(&args, Some(&format!("1\n{mixed}\n")));
+        assert!(!ok_m && out_m.is_empty() && err_m.contains("not a Zcash address"), "{out_m}{err_m}");
+        for text in [&out, &err, &js, &out_m, &err_m] {
+            assert!(![upper.as_str(), ua.as_str(), mixed.as_str()].iter().any(|t| text.contains(t)), "{text}");
+        }
+    }
     // a TEX address may be written in capitals (ZIP 320, Bech32m); a t1 address may not
     let tex = zcash_address::ZcashAddress::from_tex(NetworkType::Main, [7u8; 20]).to_string();
     for t in [tex.clone(), tex.to_uppercase()] {

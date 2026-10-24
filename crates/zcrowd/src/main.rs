@@ -64,7 +64,9 @@ enum Cmd {
         /// how many other shields of about this amount exist.
         #[arg(long, num_args = 0..=1)]
         shield: Option<Option<String>>,
-        /// Shielded pool your funds are in (or will arrive in). `any` scores all three and shows the worst.
+        /// Shielded pool your funds are in (or will arrive in). `any` scores every pool the transaction can involve and
+        /// shows the worst: all three for --unshield, Sapling and Ironwood for --shield (Orchard takes no new value from
+        /// NU6.3 on, ZIP 258, so `--shield --pool orchard` is refused).
         #[arg(long, value_enum, default_value_t = check::PoolArg::Any)]
         pool: check::PoolArg,
         /// Address you plan to unshield to (t1, t3, tex1, or a Unified Address u1 whose transparent receiver is checked), or `-` to

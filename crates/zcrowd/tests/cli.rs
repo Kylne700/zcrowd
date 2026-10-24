@@ -122,10 +122,10 @@ fn cli_check_shield_mode_and_address_reuse() {
     let (_, out, _) = run(&["check", "--shield", "-", "--pool", "sapling", "--data", f], Some("1\n"));
     contract(&out);
     assert!(out.contains("verdict: GREEN"), "{out}");
-    // without --pool the worst of the three pools counts: nothing entered Orchard or Ironwood, so the whole note would be unique there
+    // without --pool the worse of Sapling and Ironwood counts (a shield cannot go into Orchard): nothing entered Ironwood, so the whole note would be unique there
     let (_, out, _) = run(&["check", "--shield", "-", "--data", f], Some("1\n"));
     contract(&out);
-    assert!(out.contains("verdict: RED") && out.contains("pool orchard: k=0 weighted=0.0 -> RED"), "{out}");
+    assert!(out.contains("verdict: RED") && out.contains("pool ironwood: k=0 weighted=0.0 -> RED") && !out.contains("orchard"), "{out}");
     let (ok, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--pool", "sapling", "--data", f], Some(&format!("1\n{a}\n")));
     contract(&out);
     assert!(ok && out.contains("verdict: RED") && out.contains("address: RED") && out.contains("shielded on"), "{out}");
@@ -271,13 +271,56 @@ fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
         "{out}"
     );
     assert!(!out.contains("funds in another pool?") && !out.contains("pool sapling:"), "{out}");
-    // --shield: the amount that arrives in the pool, counted against entries into that pool
-    let (ok, out, _) = run(&["check", "--shield", "-", "--pool", "orchard", "--data", f], Some("1.00015\n"));
+    // --shield: the amount that arrives in the pool, counted against entries into that pool (not Orchard: see below)
+    let (ok, out, _) = run(&["check", "--shield", "-", "--pool", "ironwood", "--data", f], Some("1.00015\n"));
     assert!(ok);
     contract(&out);
-    assert!(out.contains("verdict: AMBER") && out.contains("crowd: k=3 "), "{out}");
+    assert!(out.contains("verdict: GREEN") && out.contains("crowd: k=12 "), "{out}");
     let (ok, _, err) = run(&["check", "--unshield", "-", "--pool", "bitcoin", "--data", f], Some("1.0\n"));
     assert!(!ok && err.contains("--pool"), "{err}");
+}
+
+// research/46 F5: from NU6.3 on no value may enter Orchard (ZIP 258), so a shield cannot go into it. Orchard's empty crowd
+// used to make every `--shield` under the default `--pool any` RED. Now `any` is the worse of Sapling and Ironwood, and
+// `--pool orchard` is refused before the amount is read.
+#[test]
+fn shield_mode_weighs_only_the_pools_a_shield_can_go_into() {
+    // 1.5 ZEC went into Sapling 3 times and into Ironwood 20 times; nothing went into Orchard
+    let mut v: Vec<String> = (1..=3).map(|i| line_in("shield", "sapling", 150_000_000, i, "")).collect();
+    v.extend((4..=23).map(|i| line_in("shield", "ironwood", 150_000_000, i, "")));
+    let d = data_file("cli-shield-pools.ndjson", &v);
+    let f = d.to_str().unwrap();
+    let (ok, out, err) = run(&["check", "--shield", "-", "--data", f], Some("1.5\n"));
+    assert!(ok, "{err}");
+    contract(&out);
+    for l in [
+        "check: shield (amount arriving in the pool); pool any (worst of sapling, ironwood);",
+        "pool sapling: k=3 weighted=3.0 -> AMBER",
+        "pool ironwood: k=20 weighted=20.0 -> GREEN",
+        "crowd: k=3 weighted=3.0 (pool sapling, the worst of the two:",
+        "verdict: AMBER - small crowd",
+        "other pools: 20 entries",
+    ] {
+        assert!(out.contains(l), "{l}\n{out}");
+    }
+    assert!(!out.contains("orchard"), "{out}");
+    let (ok, js, _) = run(&["check", "--shield", "-", "--json", "--data", f], Some("1.5\n"));
+    assert!(ok);
+    let j: serde_json::Value = serde_json::from_str(&js).unwrap();
+    let pools: Vec<_> = j["pools"].as_array().unwrap().iter().map(|p| p["pool"].as_str().unwrap()).collect();
+    assert_eq!((pools, j["verdict"].as_str(), j["pool"].as_str()), (vec!["sapling", "ironwood"], Some("AMBER"), Some("sapling")), "{j}");
+    // a pool that can take the shield is still scored alone
+    let (ok, out, _) = run(&["check", "--shield", "-", "--pool", "ironwood", "--data", f], Some("1.5\n"));
+    assert!(ok && out.contains("verdict: GREEN") && out.contains("crowd: k=20 weighted=20.0 "), "{out}");
+    // Orchard: refused with the reason before the amount is read, and the amount is not echoed
+    let (ok, out, err) = run(&["check", "--shield", "-", "--pool", "orchard", "--data", f], Some("1.5\n"));
+    assert!(!ok && out.is_empty() && err.contains("ZIP 258") && err.contains("--pool"), "{out}{err}");
+    assert!(!err.contains("1.5"), "{err}");
+    // unshield still weighs all three, Orchard included
+    let (ok, js, _) = run(&["check", "--unshield", "-", "--json", "--data", f], Some("1.5\n"));
+    assert!(ok);
+    let j: serde_json::Value = serde_json::from_str(&js).unwrap();
+    assert_eq!(j["pools"].as_array().unwrap().len(), 3, "{j}");
 }
 
 // The process cuts its own network. A listener on loopback is reachable from this process but not from the probe once it
@@ -544,7 +587,7 @@ fn the_amount_typed_is_never_printed_back() {
     for (what, args) in [
         ("unshield", vec!["check", "--unshield", "-", "--data", f]),
         ("unshield json", vec!["check", "--unshield", "-", "--json", "--data", f]),
-        ("shield", vec!["check", "--shield", "-", "--pool", "orchard", "--data", f]),
+        ("shield", vec!["check", "--shield", "-", "--data", f]),
     ] {
         let (ok, out, err) = run(&args, Some(&format!("{amt}\n")));
         assert!(ok && out.contains("NO MATCH") | out.contains("RED"), "{what}: {out} {err}");

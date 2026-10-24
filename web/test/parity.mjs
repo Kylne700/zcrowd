@@ -50,8 +50,15 @@ let compared = 0;
 const ties = { sample: 0, synthetic: 0 }; // comparisons whose listed matches include two with the same time
 function same(page, data, label, mode, amount, c = {}) {
   const want = cli(data, mode, amount, c);
+  const settings = { lookback: c.look ?? 30, tol: c.tol ?? 0, fee: c.fee ?? 50000, now: page.now };
+  if (mode === "shield" && c.pool === "orchard") { // a shield cannot go into Orchard (ZIP 258): the CLI and the page both refuse
+    assert.equal(want, null, `${label}: the CLI accepted a shield into Orchard (${amount})`);
+    assert.throws(() => page.check(mode, page.parse(amount), settings, "orchard"), /Orchard/, `${label}: the page accepted a shield into Orchard (${amount})`);
+    compared++;
+    return null;
+  }
   assert.ok(want, `${label}: the CLI rejected a valid amount ${amount}`);
-  const got = page.check(mode, page.parse(amount), { lookback: c.look ?? 30, tol: c.tol ?? 0, fee: c.fee ?? 50000, now: page.now }, c.pool ?? "any");
+  const got = page.check(mode, page.parse(amount), settings, c.pool ?? "any");
   const view = (r, matches) => ({ pool: r.pool, k: r.k, weighted: r.weighted, verdict: r.verdict, odd_amount: r.odd_amount, matches, pools: r.pools, other_pools_k: r.other_pools_k, suggestions: r.suggestions });
   assert.deepStrictEqual(view(got, page.txids(got)), view(want, want.matches), `${label}: ${mode} ${amount} ${JSON.stringify(c)}`);
   compared++;
@@ -180,10 +187,14 @@ try {
   assert.deepEqual(r25.pools.map((o) => [o.pool, o.k, o.verdict]), [["sapling", 1, "RED"], ["orchard", 4, "AMBER"], ["ironwood", 11, "GREEN"]]);
   assert.deepEqual([r25.pool, r25.verdict, r25.other_pools_k], ["sapling", "RED", 15]); // any = the worst pool
   assert.deepEqual(["sapling", "orchard", "ironwood"].map((x) => sp.check("unshield", zec(25), P, x).verdict), ["RED", "AMBER", "GREEN"]);
-  assert.equal(sp.check("shield", zec(25), P).pool, "sapling"); // AMBER in Sapling and Orchard: the smaller crowd is the worse one
+  // a shield cannot go into Orchard (ZIP 258): `any` is the worse of Sapling and Ironwood, whatever Orchard holds
+  const s25 = sp.check("shield", zec(25), P);
+  assert.deepEqual(s25.pools.map((o) => [o.pool, o.k, o.verdict]), [["sapling", 1, "AMBER"], ["ironwood", 11, "GREEN"]]);
+  assert.deepEqual([s25.pool, s25.verdict, s25.other_pools_k], ["sapling", "AMBER", 11]);
+  assert.throws(() => sp.check("shield", zec(25), P, "orchard"), /Orchard/);
   assert.equal(sp.check("unshield", zec(26), P).pool, "sapling"); // same verdict and weight in every pool: the first pool
   assert.equal(sp.check("unshield", zec(27), P).pool, "orchard"); // Sapling has no match, Orchard and Ironwood tie
-  assert.equal(sp.check("shield", zec(27), P).pool, "sapling"); // nobody else entered Sapling with 27: RED in shield mode
+  assert.equal(sp.check("shield", zec(27), P).pool, "sapling"); // nobody else entered Sapling with 27: RED in shield mode (Ironwood has 2: AMBER)
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }

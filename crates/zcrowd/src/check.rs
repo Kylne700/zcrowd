@@ -6,10 +6,11 @@ use std::path::PathBuf;
 use zcrowd_core::Kind;
 use zcrowd_core::crowd::{AddrFinding, Crowd, DAY, Params, Verdict, address_check, score_pools, worse, worst};
 use zcrowd_core::decode::{Via, destination, hides_crossing};
-use zcrowd_core::model::{Event, coinbase_tag, fmt_utc, fmt_zec, load, parse_zec};
+use zcrowd_core::model::{Event, Pool, coinbase_tag, fmt_utc, fmt_zec, load, parse_zec};
 use zcrowd_core::suggest::popular;
 
-/// Which shielded pool the funds are in (unshield) or will arrive in (shield). `any` scores all three and shows the worst.
+/// Which shielded pool the funds are in (unshield) or will arrive in (shield). `any` scores every pool the transaction can
+/// involve (all three for an unshield, Sapling and Ironwood for a shield) and shows the worst.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum PoolArg {
     Any,
@@ -19,13 +20,20 @@ pub enum PoolArg {
 }
 
 impl PoolArg {
-    /// The crowd to show out of `score_pools`, which lists the pools in `Pool::SINGLE` order.
-    fn pick(self, crowds: &[Crowd; 3]) -> &Crowd {
+    fn pool(self) -> Option<Pool> {
         match self {
-            PoolArg::Any => worst(crowds),
-            PoolArg::Sapling => &crowds[0],
-            PoolArg::Orchard => &crowds[1],
-            PoolArg::Ironwood => &crowds[2],
+            PoolArg::Any => None,
+            PoolArg::Sapling => Some(Pool::Sapling),
+            PoolArg::Orchard => Some(Pool::Orchard),
+            PoolArg::Ironwood => Some(Pool::Ironwood),
+        }
+    }
+
+    /// The crowd to show out of `score_pools`; `run` has already refused a pool that is not in the list.
+    fn pick(self, crowds: &[Crowd]) -> &Crowd {
+        match self.pool() {
+            None => worst(crowds),
+            Some(pool) => crowds.iter().find(|c| c.pool == pool).expect("the pool was checked before scoring"),
         }
     }
 }
@@ -75,6 +83,12 @@ pub fn run(a: Args) -> Result<()> {
     };
     if a.to.is_some() && user == Kind::Shield {
         bail!("--to applies to --unshield (the address you plan to unshield to)");
+    }
+    // refused before the amount is read, so nothing typed can be in the message
+    if user == Kind::Shield && a.pool == PoolArg::Orchard {
+        bail!(
+            "--shield cannot go into Orchard: from NU6.3 on no value may enter that pool (ZIP 258). Use --pool sapling or --pool ironwood, or leave --pool out"
+        );
     }
     let prompt = match user {
         Kind::Shield => "Amount that arrives in the pool in ZEC, what you shield minus the fee (not shown): ",
@@ -157,7 +171,11 @@ pub fn run(a: Args) -> Result<()> {
     // The amount typed is never printed back: it may sit in a terminal's scrollback or a CI log.
     println!(
         "check: {what}; pool {}; fee allowance {} zat, tolerance {} zat, lookback {} days",
-        if a.pool == PoolArg::Any { "any (worst of sapling, orchard, ironwood)" } else { c.pool.name() },
+        if a.pool == PoolArg::Any {
+            format!("any (worst of {})", crowds.iter().map(|o| o.pool.name()).collect::<Vec<_>>().join(", "))
+        } else {
+            c.pool.name().into()
+        },
         if user == Kind::Unshield { a.fee_allowance_zat } else { 0 },
         a.tol_zat,
         a.lookback_days
@@ -177,7 +195,13 @@ pub fn run(a: Args) -> Result<()> {
         c.k,
         c.weighted,
         c.pool.name(),
-        if a.pool == PoolArg::Any { ", the worst of the three" } else { "" }
+        if a.pool != PoolArg::Any {
+            ""
+        } else if crowds.len() == 2 {
+            ", the worst of the two"
+        } else {
+            ", the worst of the three"
+        }
     );
     println!(
         "other pools: {elsewhere} entries of about this amount went into the other pools: linkable only through a visible pool move; not counted"

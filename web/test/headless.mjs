@@ -226,15 +226,22 @@ async function privacy(browser, origin, url) {
   await amount.fill("");
   assert.match(await page.locator("#msg").innerText(), /Type an amount/);
   await scan("empty");
-  // shield mode: the decoys are the other entries into the pool the funds arrive in. Orchard has none, so "Not sure" is
-  // RED; into Sapling 1.24985 ZEC has a crowd of 88
+  // shield mode: the decoys are the other entries into the pool the funds arrive in. A shield cannot go into Orchard (ZIP 258),
+  // so "Not sure" is the worse of Sapling and Ironwood: 1.24985 ZEC has a crowd of 88 in Sapling but 8 in Ironwood
   await page.locator("#mode").selectOption("shield");
   await amount.fill("1.24985");
-  assert.equal((await page.locator("#verdict").innerText()).trim(), "RED");
-  assert.ok((await page.locator("#note").innerText()).includes(missing), "RED in shield mode");
-  await scan("shield RED");
+  assert.equal((await page.locator("#verdict").innerText()).trim(), "AMBER");
+  assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=88 weighted=64.5 -> GREEN", "pool ironwood: k=8 weighted=6.0 -> AMBER"]);
+  assert.match(await page.locator("#crowd").innerText(), /^8 other shields and moves into ironwood \(the worst of the two pools\) of about 1\.24985000 ZEC /);
+  assert.match(await page.locator("#pool option[value=any]").innerText(), /^Not sure \(check Sapling and Ironwood, show the worse\)$/);
+  await scan("shield AMBER");
+  await page.locator("#pool").selectOption("orchard");
+  assert.match(await page.locator("#msg").innerText(), /^A shield cannot go into Orchard: from NU6\.3 on no value may enter that pool \(ZIP 258\)\./);
+  assert.ok(await page.locator("#out").isHidden(), "no verdict for a shield into Orchard");
+  await scan("shield into Orchard refused");
   await page.locator("#pool").selectOption("sapling");
   assert.equal((await page.locator("#verdict").innerText()).trim(), "GREEN");
+  assert.equal((await page.locator("#msg").innerText()).trim(), "");
   assert.match(await page.locator("#crowd").innerText(), /^88 other shields and moves into sapling of about 1\.24985000 ZEC /);
   await page.locator("#pool").selectOption("any");
   assert.equal(page.url(), url, "URL changed");

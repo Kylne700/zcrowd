@@ -86,7 +86,7 @@
 
 <h2>About this sample</h2>
 <p class="small" id="cov"></p>
-<p class="small">How it works: an observer who sees an entry into a shielded pool (a shield, or a move from another pool) of about your amount followed by an unshield of about your amount from the same pool, allowing for the fee, can guess they belong together; recent matches count fully and matches older than 14 days count half. The crowd is the number of such entries into your pool; entries into the other pools are not counted, because they are linkable only through a visible pool move. &quot;Not sure&quot; checks all three pools and shows the worst. GREEN (a weighted crowd of 10 or more) means a big crowd for amount and timing only, not &quot;private&quot;. NO MATCH means no entry of about that amount into the pool in the window, so amount matching cannot tie this unshield to a shield in it. An amount with 5 or more decimals is easy to recognise later, so round amounts blend in better.</p>
+<p class="small">How it works: an observer who sees an entry into a shielded pool (a shield, or a move from another pool) of about your amount followed by an unshield of about your amount from the same pool, allowing for the fee, can guess they belong together; recent matches count fully and matches older than 14 days count half. The crowd is the number of such entries into your pool; entries into the other pools are not counted, because they are linkable only through a visible pool move. &quot;Not sure&quot; checks every pool the transaction can involve and shows the worst: all three for an unshield, Sapling and Ironwood for a shield (from NU6.3 on no value may enter Orchard, ZIP 258, so a shield cannot go into it). GREEN (a weighted crowd of 10 or more) means a big crowd for amount and timing only, not &quot;private&quot;. NO MATCH means no entry of about that amount into the pool in the window, so amount matching cannot tie this unshield to a shield in it. An amount with 5 or more decimals is easy to recognise later, so round amounts blend in better.</p>
 <p class="small">Covers amount + timing within one pool. Not covered: address reuse (use the command line tool with --to), wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), the z-&gt;z graph, links through pool moves beyond their amounts, off-chain records. The sample is a frozen copy: the command line tool syncs fresh data and cuts its own network access before it looks at your amount.</p>
 
 <script>
@@ -157,10 +157,15 @@ function popular(mode, pool, zat, p, n) {
 const RANK = { "NO MATCH": 0, GREEN: 1, AMBER: 2, RED: 3 };
 // The worst pool: worse verdict first, then the smaller weighted crowd, then the pool listed first (crowd.rs `worst`).
 const worst = (cs) => cs.slice(1).reduce((a, b) => (RANK[b.verdict] > RANK[a.verdict] || (b.verdict === a.verdict && b.weighted < a.weighted) ? b : a), cs[0]);
-// `pool` is a name from POOLS, or "any": score all three and take the worst.
+// The pools a check scores (indexes into POOLS; crowd.rs `pools_for`). A shield cannot go into Orchard: from NU6.3 on no value may
+// enter that pool (ZIP 258), so its crowd is empty for good and would make every shield RED.
+const targets = (mode) => (mode === "shield" ? [0, 2] : [0, 1, 2]);
+const ORCHARD_SHIELD = "A shield cannot go into Orchard: from NU6.3 on no value may enter that pool (ZIP 258). Choose Sapling, Ironwood or Not sure.";
+// `pool` is a name from POOLS, or "any": score every pool of the mode and take the worst.
 function check(mode, zat, p, pool = "any") {
-  const pools = POOLS.map((name, i) => { const [k, weighted] = count(mode, i, zat, p); return { pool: name, k, weighted, verdict: verdictFor(mode, k, weighted) }; });
-  const c = pool === "any" ? worst(pools) : pools[POOLS.indexOf(pool)];
+  if (mode === "shield" && pool === "orchard") throw new Error(ORCHARD_SHIELD);
+  const pools = targets(mode).map((i) => { const [k, weighted] = count(mode, i, zat, p); return { pool: POOLS[i], k, weighted, verdict: verdictFor(mode, k, weighted) }; });
+  const c = pool === "any" ? worst(pools) : pools.find((o) => o.pool === pool);
   const i = POOLS.indexOf(c.pool);
   const matches = BY_POOL[i].filter(([t, z]) => inScope(mode, zat, p, t, z)).sort((a, b) => b[0] - a[0] || a[3] - b[3]).slice(0, 10).map(([t, z, , rank]) => ({ t, zat: z, rank }));
   return {
@@ -193,11 +198,15 @@ if (typeof document !== "undefined") {
   function run() {
     const mode = $("mode").value, pool = $("pool").value;
     put($("pool-label"), mode === "unshield" ? "Pool your funds are in" : "Pool you will shield into");
+    const opt = (v) => $("pool").querySelector('option[value="' + v + '"]');
+    put(opt("any"), mode === "unshield" ? "Not sure (check all three, show the worst)" : "Not sure (check Sapling and Ironwood, show the worse)");
+    put(opt("orchard"), mode === "unshield" ? "Orchard" : "Orchard (cannot take a shield)");
     put($("amount-label"), mode === "unshield" ? "Amount in ZEC" : "Amount in ZEC that arrives in the pool (what you shield minus the fee)");
     $("amount-hint").textContent = mode === "unshield" ? "The amount the recipient receives." : "The amount that arrives in the shielded pool: what you shield minus the fee, not what your wallet sends.";
     const raw = $("amount").value;
     const p = { ...DEFAULTS };
     $("out").hidden = true;
+    if (mode === "shield" && pool === "orchard") { put($("msg"), ORCHARD_SHIELD); return; }
     if (raw.trim() === "") { put($("msg"), "Type an amount, or try one of the real examples above."); return; }
     let zat;
     try {
@@ -209,7 +218,7 @@ if (typeof document !== "undefined") {
     const c = DATA.cov;
     const v = $("verdict"); put(v, r.verdict); v.className = r.verdict.replace(" ", "");
     put($("why"), WHY[mode][r.verdict] || "");
-    const into = " into " + r.pool + (pool === "any" ? " (the worst of the three pools)" : "") + " of about " + fmtZec(zat) + " ZEC";
+    const into = " into " + r.pool + (pool === "any" ? " (the worst of the " + (r.pools.length === 2 ? "two" : "three") + " pools)" : "") + " of about " + fmtZec(zat) + " ZEC";
     put($("crowd"), (mode === "unshield"
       ? r.k + " earlier shields and moves" + into + " (allowing for the fee)"
       : r.k + " other shields and moves" + into + " (the decoys for a later unshield of the whole note)")

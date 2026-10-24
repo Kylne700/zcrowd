@@ -103,9 +103,20 @@ pub fn score(events: &[Event], user: Kind, pool: Pool, zat: u64, p: &Params) -> 
     Crowd { pool, k, weighted, verdict: verdict_for(user, k, weighted), odd_amount: sig_decimals(zat) >= 5, matches }
 }
 
-/// One crowd per pool, in `Pool::SINGLE` order.
-pub fn score_pools(events: &[Event], user: Kind, zat: u64, p: &Params) -> [Crowd; 3] {
-    Pool::SINGLE.map(|pool| score(events, user, pool, zat, p))
+/// The pools a check scores, in `Pool::SINGLE` order. A shield cannot go into Orchard: from NU6.3 on no value may enter
+/// that pool (ZIP 258: `v^OrchardPoolBalance >= 0` for every transaction), so its crowd is empty for good and would make
+/// every shield read RED. An unshield can leave any pool.
+/// shortcut: not keyed on height, a check is about a transaction made now; data from before NU6.3 is not special-cased.
+pub fn pools_for(user: Kind) -> &'static [Pool] {
+    match user {
+        Kind::Shield => &[Pool::Sapling, Pool::Ironwood],
+        _ => &Pool::SINGLE,
+    }
+}
+
+/// One crowd per pool of `pools_for(user)`, in `Pool::SINGLE` order.
+pub fn score_pools(events: &[Event], user: Kind, zat: u64, p: &Params) -> Vec<Crowd> {
+    pools_for(user).iter().map(|&pool| score(events, user, pool, zat, p)).collect()
 }
 
 /// The worse of two verdicts: RED > AMBER > GREEN > NO MATCH.
@@ -119,9 +130,9 @@ pub fn worse(a: Verdict, b: Verdict) -> Verdict {
     if rank(b) > rank(a) { b } else { a }
 }
 
-/// The pool with the worst verdict (`--pool any`). A tie goes to the smaller weighted crowd, then to the
-/// pool listed first in `Pool::SINGLE`. web/index.template.html does the same.
-pub fn worst(crowds: &[Crowd; 3]) -> &Crowd {
+/// The pool with the worst verdict (`--pool any`; `crowds` is never empty). A tie goes to the smaller weighted crowd,
+/// then to the pool listed first in `Pool::SINGLE`. web/index.template.html does the same.
+pub fn worst(crowds: &[Crowd]) -> &Crowd {
     crowds.iter().skip(1).fold(&crowds[0], |a, b| {
         let b_is_worse = worse(a.verdict, b.verdict) != a.verdict || (a.verdict == b.verdict && b.weighted < a.weighted);
         if b_is_worse { b } else { a }
@@ -374,13 +385,17 @@ mod tests {
         assert!(matches!(address_check(&evs, "t1dst", NOW), AddrFinding::UsedAsDestination { n: 1, .. }));
     }
 
+    // research/46 F5: a shield cannot go into Orchard (ZIP 258), so shield mode scores Sapling and Ironwood only; an unshield
+    // can leave any pool. Each listed pool counts the entries into itself and no others.
     #[test]
-    fn shield_mode_counts_entries_into_the_chosen_pool_only() {
-        let evs: Vec<_> = (0..12).map(|i| ev_in(Kind::Shield, Pool::Orchard, X, NOW - 10 - i)).collect();
-        assert_eq!(
-            by_pool(&evs, Kind::Shield, X),
-            [(Pool::Sapling, 0, Verdict::Red), (Pool::Orchard, 12, Verdict::Green), (Pool::Ironwood, 0, Verdict::Red)]
-        );
+    fn shield_mode_counts_entries_into_the_chosen_pool_only_and_never_scores_orchard() {
+        let into_orchard: Vec<_> = (0..12).map(|i| ev_in(Kind::Shield, Pool::Orchard, X, NOW - 10 - i)).collect();
+        assert_eq!(by_pool(&into_orchard, Kind::Shield, X), [(Pool::Sapling, 0, Verdict::Red), (Pool::Ironwood, 0, Verdict::Red)]);
+        assert_eq!(by_pool(&into_orchard, Kind::Unshield, X)[1], (Pool::Orchard, 12, Verdict::Green));
+        let into_ironwood: Vec<_> = (0..12).map(|i| ev_in(Kind::Shield, Pool::Ironwood, X, NOW - 10 - i)).collect();
+        assert_eq!(by_pool(&into_ironwood, Kind::Shield, X), [(Pool::Sapling, 0, Verdict::Red), (Pool::Ironwood, 12, Verdict::Green)]);
+        assert_eq!(pools_for(Kind::Shield), [Pool::Sapling, Pool::Ironwood]);
+        assert_eq!(pools_for(Kind::Unshield), Pool::SINGLE);
     }
 
     // The command line limits these (MAX_LOOKBACK_DAYS, MAX_SLACK_ZAT), but the library takes any u64: a debug build panics
@@ -392,7 +407,8 @@ mod tests {
         for user in [Kind::Unshield, Kind::Shield] {
             assert_eq!(score(&evs, user, X, &big).k, 2);
             assert_eq!(score(&evs, user, u64::MAX, &big).k, 2);
-            assert_eq!(score_pools(&evs, user, X, &big).map(|c| c.k), [2, 0, 0]);
+            let want: &[usize] = if user == Kind::Shield { &[2, 0] } else { &[2, 0, 0] };
+            assert_eq!(score_pools(&evs, user, X, &big).iter().map(|c| c.k).collect::<Vec<_>>(), want);
             let _ = crate::suggest::popular(&evs, user, Pool::Sapling, u64::MAX, &big, 5);
         }
         // the lookback reaches back to the start of time and no further

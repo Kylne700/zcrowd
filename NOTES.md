@@ -496,6 +496,32 @@ it with the Rust output wherever the case is reachable):
 The sample and the number in the examples above are those of the unchanged sample; the stale coinbase `src` lines of the sample
 (1,466) are still in it, `verify` on them shows DIFF until the data refresh (S9e).
 
+### Final run (S9d)
+
+On the tree after the last change to code, tests or the page (b602a2c; the commits after it change NOTES.md only), debug
+profile, load average 1 to 3, `PLAYWRIGHT_CORE=<playwright-core dir>`, no `LIVE=1`. Every command ended with exit 0:
+
+- `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
+- `cargo test`, twice in a row (F7 was a race): 112 tests passed, 0 failed, both times (13 s and 9 s; 99 tests in the S9c run).
+- `bash tests/e2e.sh`: `E2E OK`, 111 s, 30 `ok` lines and its own `skip  LIVE=1 not set`; inside it `AUDIT OK (1 check(s)
+  skipped and NOT VERIFIED ...)`, the one skipped check being T3/T4/T6 (the live Tor leak check). The `ok` lines that differ
+  from the S9c run above: `cargo test: 112 tests passed, 0 failed`, `P10 PARITY OK: 1008 JS-vs-Rust comparisons ...`, `P11 ...
+  70 commits, one neutral identity ...` and the two P2 lines of the sandbox section.
+- `bash tests/audit.sh` alone: `AUDIT OK`, 93 s, 22 `ok` lines, the same one SKIP.
+- `node web/test/parity.mjs`, 68 s: `PARITY OK: 1008 JS-vs-Rust comparisons (128 sample amounts, 20 rejected inputs, synthetic
+  edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (9 sample and 39 synthetic
+  comparisons with a time tie)`.
+- `BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`, 15 s: `HEADLESS OK (chromium 154.0.8037.92, firefox 157.0,
+  webkit 27.2; the server saw 3 page loads and nothing else)`.
+- The privacy scan of the repository over all branches (counts): 0 tree files and 0 history lines with a personal-string hit,
+  0 mail addresses in files, 0 home paths in files and history, 0 key-like files, 0 hits in the HEAD message; one author and
+  committer (the neutral address; 82 commits over all branches); the only mail domains in history are that address's and
+  the `noreply` trailer's.
+
+Not run: `LIVE=1 bash tests/audit.sh` (T3/T4/T6) and the `LIVE=1` sync of `tests/e2e.sh`. `sync` itself is untouched by this
+stage (`source.rs`, `ingest.rs` and `sync.rs` are as in S9c, and `sync` does not enter the sandbox), so the live audit of
+S9c still describes it; what this stage changed on that path is the `--tor-dir` argument of the e2e line (NOT VERIFIED).
+
 ## Deviations from the first design (and why)
 
 1. `--unshield 1.23456789` prints NO MATCH plus the odd-amount note, not RED (the first design said RED; the privacy spec made odd amounts a
@@ -574,7 +600,8 @@ added the project's own private GitHub remote `origin`. The agents never push, a
 
 - `sync` over Tor on macOS and Windows, on networks that block Tor, and from servers other than `zec.rocks` (the first
   connection to another host through a freshly started Tor timed out at the exit once); the cause of one hang in an
-  early Tor sync. macOS, Windows. Firefox and Safari for the web demo.
+  early Tor sync. macOS, Windows. Safari itself for the web demo (its headless test ran in Chromium 154, Firefox 157 and
+  Playwright's WebKit 27.2 in the final runs of S9c and S9d).
 - Release-build behaviour: the release binary was built and ran the timed syncs of the review-fix stage; the tests and
   the e2e run use the debug profile only.
 - P2SH input-address detection beyond the t3 sources seen in the sample. Whether a lightwalletd server offers all three
@@ -583,7 +610,7 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   that leaves a pool out for only part of the range is not noticed.
 - The consensus side of the Orchard finding above is taken from the text of ZIP 258 (Final), not from node code: zebrad and
   zcashd were not read, and the sample holds no entry into Orchard to test the rule against (its 443 Orchard events are
-  all unshields). The oldest Rust that builds it
+  all unshields). The oldest Rust that builds the workspace
   is 1.90 (`rust-version`; `cargo +1.90.0 check --workspace --all-targets --locked` passes, S9c); the tests ran with 1.97.1 only. Whether
   the empty network namespace works on a default Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`): the
   seccomp layer does not need it, and the `sandbox` CI job runs without the sysctl switch to show both (no CI run has

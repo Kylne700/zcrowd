@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const BIN: &str = env!("CARGO_BIN_EXE_zcrowd");
@@ -65,10 +65,18 @@ fn run_env(args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> (bool, S
     c.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = c.spawn().unwrap();
     if let Some(s) = stdin {
-        child.stdin.take().unwrap().write_all(s.as_bytes()).unwrap();
+        feed(&mut child, s);
     }
     let o = child.wait_with_output().unwrap();
     (o.status.success(), String::from_utf8_lossy(&o.stdout).into(), String::from_utf8_lossy(&o.stderr).into())
+}
+
+/// Types `s` into the child and closes its stdin. A child that refuses its arguments exits without reading it, so on a busy machine the
+/// pipe can be broken before we write: that is the child's answer, not a failure of the test (research/46 F7). Any other error is one.
+fn feed(child: &mut Child, s: &str) {
+    if let Err(e) = child.stdin.take().unwrap().write_all(s.as_bytes()) {
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "writing to the child's stdin: {e}");
+    }
 }
 
 /// The stable output contract: exactly one `verdict: <NO MATCH|RED|AMBER|GREEN>` line and one `crowd: k=<n> weighted=<w>` line.
@@ -81,6 +89,25 @@ fn contract(out: &str) {
     let (k, rest) = c[0].strip_prefix("crowd: k=").and_then(|r| r.split_once(" weighted=")).unwrap_or_else(|| panic!("{out}"));
     k.parse::<u64>().unwrap();
     rest.split(' ').next().unwrap().parse::<f64>().unwrap();
+}
+
+/// The race behind the random failures of the option-limit test, made certain: the child is already gone when its input is written.
+/// (`try_wait` polls without closing our end of its stdin, so the pipe is broken by then.)
+#[test]
+fn input_for_a_child_that_already_refused_its_arguments_is_not_a_test_failure() {
+    let mut child = Command::new(BIN)
+        .args(["check", "--no-such-flag"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let t0 = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        assert!(t0.elapsed().as_secs() < 30, "the child did not exit");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    feed(&mut child, "1.0\n");
 }
 
 #[test]

@@ -311,10 +311,7 @@ mod tests {
         evs.extend((0..12).map(|i| ev_in(Kind::Shield, Pool::Ironwood, X, NOW - 100 - i)));
         evs.extend((0..2).map(|i| ev_in(Kind::Shield, Pool::Orchard, X, NOW - 200 - i)));
         let all = by_pool(&evs, Kind::Unshield, X);
-        assert_eq!(
-            all,
-            [(Pool::Sapling, 1, Verdict::Red), (Pool::Orchard, 2, Verdict::Amber), (Pool::Ironwood, 12, Verdict::Green)]
-        );
+        assert_eq!(all, [(Pool::Sapling, 1, Verdict::Red), (Pool::Orchard, 2, Verdict::Amber), (Pool::Ironwood, 12, Verdict::Green)]);
         assert_eq!(worst(&score_pools(&evs, Kind::Unshield, X, &p(0))).pool, Pool::Sapling);
         // the same crowd without the lone Sapling shield: AMBER (Orchard) is the worst of AMBER, GREEN, NO MATCH
         assert_eq!(worst(&score_pools(&evs[1..], Kind::Unshield, X, &p(0))).pool, Pool::Orchard);
@@ -325,10 +322,16 @@ mod tests {
         let crowd = |pool, k: usize, weighted: f64, verdict| Crowd { pool, k, weighted, verdict, odd_amount: false, matches: vec![] };
         let (s, o, i) = (Pool::Sapling, Pool::Orchard, Pool::Ironwood);
         // GREEN is worse than NO MATCH
-        assert_eq!(worst(&[crowd(s, 0, 0.0, Verdict::NoMatch), crowd(o, 20, 20.0, Verdict::Green), crowd(i, 0, 0.0, Verdict::NoMatch)]).pool, o);
+        assert_eq!(
+            worst(&[crowd(s, 0, 0.0, Verdict::NoMatch), crowd(o, 20, 20.0, Verdict::Green), crowd(i, 0, 0.0, Verdict::NoMatch)]).pool,
+            o
+        );
         // equal verdicts: the smaller weighted crowd, then the first pool
         assert_eq!(worst(&[crowd(s, 5, 5.0, Verdict::Amber), crowd(o, 4, 2.0, Verdict::Amber), crowd(i, 4, 2.0, Verdict::Amber)]).pool, o);
-        assert_eq!(worst(&[crowd(s, 0, 0.0, Verdict::NoMatch), crowd(o, 0, 0.0, Verdict::NoMatch), crowd(i, 0, 0.0, Verdict::NoMatch)]).pool, s);
+        assert_eq!(
+            worst(&[crowd(s, 0, 0.0, Verdict::NoMatch), crowd(o, 0, 0.0, Verdict::NoMatch), crowd(i, 0, 0.0, Verdict::NoMatch)]).pool,
+            s
+        );
         assert_eq!(worst(&[crowd(s, 1, 1.0, Verdict::Red), crowd(o, 1, 0.5, Verdict::Red), crowd(i, 1, 1.0, Verdict::Red)]).pool, o);
     }
 
@@ -336,7 +339,7 @@ mod tests {
     #[test]
     fn e13_a_move_into_ironwood_is_a_candidate_for_an_ironwood_unshield() {
         let mv = ev_in(Kind::Move, Pool::Ironwood, X + 15_000, NOW - 60);
-        let at = |pool, user| super::score(&[mv.clone()], user, pool, X, &p(0)).k;
+        let at = |pool, user| super::score(std::slice::from_ref(&mv), user, pool, X, &p(0)).k;
         assert_eq!((at(Pool::Ironwood, Kind::Unshield), at(Pool::Orchard, Kind::Unshield), at(Pool::Sapling, Kind::Unshield)), (1, 0, 0));
         // a move is also a decoy for someone who is about to shield the same amount into that pool
         assert_eq!(super::score(&[mv], Kind::Shield, Pool::Ironwood, X + 15_000, &p(0)).k, 1);
@@ -369,6 +372,9 @@ mod tests {
     #[test]
     fn shield_mode_counts_entries_into_the_chosen_pool_only() {
         let evs: Vec<_> = (0..12).map(|i| ev_in(Kind::Shield, Pool::Orchard, X, NOW - 10 - i)).collect();
-        assert_eq!(by_pool(&evs, Kind::Shield, X), [(Pool::Sapling, 0, Verdict::Red), (Pool::Orchard, 12, Verdict::Green), (Pool::Ironwood, 0, Verdict::Red)]);
+        assert_eq!(
+            by_pool(&evs, Kind::Shield, X),
+            [(Pool::Sapling, 0, Verdict::Red), (Pool::Orchard, 12, Verdict::Green), (Pool::Ironwood, 0, Verdict::Red)]
+        );
     }
 }

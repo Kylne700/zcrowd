@@ -118,7 +118,10 @@ pub fn run(a: Args) -> Result<()> {
     let (what, other) = if user == Kind::Unshield {
         ("unshield (recipient gets this amount)", "earlier shields and moves into it of about this amount, allowing for the fee")
     } else {
-        ("shield (amount arriving in the pool)", "other shields and moves into it of about this amount, the decoys for a later unshield of the whole note")
+        (
+            "shield (amount arriving in the pool)",
+            "other shields and moves into it of about this amount, the decoys for a later unshield of the whole note",
+        )
     };
     println!(
         "check: {what} {} ZEC; pool {}; fee allowance {} zat, tolerance {} zat, lookback {} days",
@@ -166,7 +169,9 @@ pub fn run(a: Args) -> Result<()> {
         c.pool.name(),
         if a.pool == PoolArg::Any { ", the worst of the three" } else { "" }
     );
-    println!("other pools: {elsewhere} entries of about this amount went into the other pools: linkable only through a visible pool move; not counted");
+    println!(
+        "other pools: {elsewhere} entries of about this amount went into the other pools: linkable only through a visible pool move; not counted"
+    );
     if !c.matches.is_empty() {
         println!("matches (newest first, up to 10):");
         for e in &c.matches {

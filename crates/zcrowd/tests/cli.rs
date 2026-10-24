@@ -98,7 +98,8 @@ fn cli_check_shield_mode_and_address_reuse() {
     contract(&out);
     assert!(ok && out.contains("verdict: RED") && out.contains("address: RED") && out.contains("shielded on"), "{out}");
     // --json carries the same overall verdict (not the amount's GREEN), plus the two parts; no typed value in it
-    let (ok, js, _) = run(&["check", "--unshield", "-", "--to", "-", "--pool", "sapling", "--json", "--data", f], Some(&format!("1\n{a}\n")));
+    let (ok, js, _) =
+        run(&["check", "--unshield", "-", "--to", "-", "--pool", "sapling", "--json", "--data", f], Some(&format!("1\n{a}\n")));
     assert!(ok && js.contains(r#""verdict":"RED""#), "{js}");
     assert!(js.contains(r#""amount_verdict":"GREEN""#) && js.contains(r#""address_verdict":"RED""#), "{js}");
     assert!(!js.contains(a), "{js}");
@@ -130,7 +131,11 @@ fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
     };
     for (pool, k, verdict, elsewhere) in [("sapling", 1, "RED", 15), ("orchard", 3, "AMBER", 13), ("ironwood", 12, "GREEN", 4)] {
         let j = json(pool);
-        assert_eq!((j["pool"].as_str(), j["k"].as_u64(), j["verdict"].as_str(), j["other_pools_k"].as_u64()), (Some(pool), Some(k), Some(verdict), Some(elsewhere)), "{j}");
+        assert_eq!(
+            (j["pool"].as_str(), j["k"].as_u64(), j["verdict"].as_str(), j["other_pools_k"].as_u64()),
+            (Some(pool), Some(k), Some(verdict), Some(elsewhere)),
+            "{j}"
+        );
         assert_eq!(j["pools"].as_array().unwrap().len(), 3, "{j}");
     }
     let j = json("any");
@@ -153,7 +158,10 @@ fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
     let (ok, out, _) = run(&["check", "--unshield", "-", "--pool", "ironwood", "--data", f], Some("1.0\n"));
     assert!(ok);
     contract(&out);
-    assert!(out.contains("verdict: GREEN") && out.contains("crowd: k=12 weighted=12.0 ") && out.contains("other pools: 4 entries"), "{out}");
+    assert!(
+        out.contains("verdict: GREEN") && out.contains("crowd: k=12 weighted=12.0 ") && out.contains("other pools: 4 entries"),
+        "{out}"
+    );
     assert!(!out.contains("funds in another pool?") && !out.contains("pool sapling:"), "{out}");
     // --shield: the amount that arrives in the pool, counted against entries into that pool
     let (ok, out, _) = run(&["check", "--shield", "-", "--pool", "orchard", "--data", f], Some("1.00015\n"));

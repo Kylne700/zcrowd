@@ -112,7 +112,13 @@ fn chain(from: u64, n: u64) -> Chain {
     let hash = |h: u64| format!("{h:064x}");
     Chain(
         (from..from + n)
-            .map(|h| BlockSummary { h, t: 1_700_000_000 + h, txs: vec![tx(h, 1, 0, true, false, false)], hash: hash(h), prev_hash: hash(h - 1) })
+            .map(|h| BlockSummary {
+                h,
+                t: 1_700_000_000 + h,
+                txs: vec![tx(h, 1, 0, true, false, false)],
+                hash: hash(h),
+                prev_hash: hash(h - 1),
+            })
             .collect(),
     )
 }
@@ -177,13 +183,13 @@ async fn block_chain_is_checked_across_request_chunks() {
 #[tokio::test]
 async fn candidate_kinds_cover_coinbase_and_moves() {
     let txs = vec![
-        tx(1, 0, 1, true, false, true),  // shielded coinbase: the compact vin leaves its input out, so n_vin is 0
-        tx(2, 2, 0, true, false, false), // transparent inputs
-        tx(3, 0, 1, true, false, false), // transparent output only
-        tx(4, 0, 0, true, true, false),  // no transparent part, two pools: a possible move
-        tx(5, 0, 0, true, false, false), // no transparent part, one pool: nothing to see
+        tx(1, 0, 1, true, false, true),   // shielded coinbase: the compact vin leaves its input out, so n_vin is 0
+        tx(2, 2, 0, true, false, false),  // transparent inputs
+        tx(3, 0, 1, true, false, false),  // transparent output only
+        tx(4, 0, 0, true, true, false),   // no transparent part, two pools: a possible move
+        tx(5, 0, 0, true, false, false),  // no transparent part, one pool: nothing to see
         tx(6, 1, 1, false, false, false), // no shielded part
-        tx(7, 3, 2, true, true, false),  // everything: it is shield-like, decode sorts it out
+        tx(7, 3, 2, true, true, false),   // everything: it is shield-like, decode sorts it out
     ];
     let src = Chain(vec![BlockSummary { h: 5, t: 9, txs, hash: format!("{:064x}", 5), prev_hash: format!("{:064x}", 4) }]);
     let (c, st) = candidates(&src, 5, 5).await.unwrap();

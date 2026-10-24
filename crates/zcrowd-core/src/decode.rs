@@ -87,6 +87,7 @@ fn pushes(s: &[u8]) -> Option<Vec<&[u8]>> {
 
 /// Address that spent an input, read from its scriptSig. Heuristic, public data only:
 /// `<sig> <pubkey>` is P2PKH; `... <redeem script>` with at least two pushes is P2SH. Anything else: None.
+/// Not for a coinbase input: its scriptSig is free text and has no address (`event_from_tx` never asks).
 pub fn input_address(script_sig: &[u8]) -> Option<String> {
     let p = pushes(script_sig)?;
     let last = *p.last()?;
@@ -186,7 +187,10 @@ pub fn event_from_tx(raw: &[u8], height: u64, time: u64) -> Result<Decoded> {
         Ok(c) => c,
     };
     let addrs = |it: BTreeSet<String>| it.into_iter().collect::<Vec<_>>();
-    let src = if c.kind == Kind::Shield {
+    let coinbase = tb.is_some_and(|b| b.is_coinbase());
+    // A coinbase input spends nothing, so it has no address: its scriptSig is whatever text the miner wrote, and
+    // `input_address` would read the last piece of that text as a P2SH redeem script and invent a t3 address.
+    let src = if c.kind == Kind::Shield && !coinbase {
         #[allow(deprecated)]
         addrs(tb.iter().flat_map(|b| &b.vin).filter_map(|i| input_address(&i.script_sig().0.0)).collect())
     } else {
@@ -216,7 +220,7 @@ pub fn event_from_tx(raw: &[u8], height: u64, time: u64) -> Result<Decoded> {
         n_tout,
         txid: tx.txid().to_string(),
         confidence: if c.low { Confidence::Low } else { Confidence::High },
-        coinbase: tb.is_some_and(|b| b.is_coinbase()),
+        coinbase,
         src,
         dst,
     }))

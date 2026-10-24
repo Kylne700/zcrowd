@@ -63,7 +63,8 @@ pub struct Event {
     /// Shielded coinbase (block reward shielded by the miner).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub coinbase: bool,
-    /// Transparent input addresses of a shield (public chain data; unknown script shapes omitted).
+    /// Transparent input addresses of a shield (public chain data; unknown script shapes omitted; none for a coinbase, whose
+    /// input has no address).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub src: Vec<String>,
     /// Transparent output addresses of an unshield.

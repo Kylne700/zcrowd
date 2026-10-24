@@ -252,6 +252,19 @@ fn decode_unshield_from_ironwood_only() {
 fn decode_coinbase_shield_into_ironwood() {
     let e = ev("6262a45c8455ce5a5b148b1a48ca13c3e32dfc052c50ccda7fcbc8d5f26e2445", 3499538);
     assert_eq!((e.kind, e.zat, e.pool, e.confidence, e.coinbase), (Kind::Shield, 125_469_612, Pool::Ironwood, Confidence::High, true));
+    assert!(e.src.is_empty());
+}
+
+// B1: a coinbase input has no address; its scriptSig is the miner's own text. The text of this block reward is two pushes
+// and the last one is no public key, which the P2SH rule of `input_address` reads as a redeem script: the old decoder
+// invented a t3 address (the hash of "Get Sluicey Yall sluicey.xyz"). An independent check on 2026-10-24 against two
+// public explorers (Cipherscan, zcashexplorer.app) found no input address for this transaction: its only input is a
+// `coinbase` field.
+#[test]
+fn a_coinbase_input_has_no_address_even_when_its_text_looks_like_a_redeem_script() {
+    let e = ev("8db5109ff953c22f872e49ebbd2236be4aedc0402b812ede2b01d5c2fa707bf2", 3496848);
+    assert_eq!((e.kind, e.zat, e.pool, e.confidence, e.coinbase, e.n_tin), (Kind::Shield, 125_010_000, Pool::Ironwood, Confidence::High, true, 1));
+    assert!(e.src.is_empty(), "{:?}", e.src);
 }
 
 // Real transactions that are not events: a transparent input that only pays the fee next to an empty Ironwood bundle

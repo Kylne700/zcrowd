@@ -72,7 +72,26 @@ printf '1.2497\n%s\n' "$ADDR" | "$BIN" check --unshield - --to - --data "$D" >"$
 contract "$T/c4" "check --to"
 grep -q '^verdict: RED' "$T/c4" && grep -q '^address: RED - this address shielded on ' "$T/c4" || die "check --to: reuse of a shield source address must be RED"
 if grep -qF "$ADDR" "$T/c4"; then die "check --to echoed the address"; fi
-ok "check: one verdict line and one crowd line each time; 1.0 NO MATCH; 1.2497 k=157 weighted=114.5 GREEN (text and --json); --to a shield source address RED"
+# --json must carry the same overall verdict as the text (the amount alone is GREEN, the reused address makes it RED)
+printf '1.2497\n%s\n' "$ADDR" | "$BIN" check --unshield - --to - --json --data "$D" >"$T/c5" 2>&1 || die "check --to --json"
+python3 - "$T/c5" <<'PY' || die "check --to --json: verdict is not the overall one"
+import json, sys
+j = json.load(open(sys.argv[1]))
+assert (j["verdict"], j["amount_verdict"], j["address_verdict"]) == ("RED", "GREEN", "RED"), j
+PY
+if grep -qF "$ADDR" "$T/c5"; then die "check --to --json echoed the address"; fi
+# the README RED example: 3.73 ZEC has exactly one earlier shield of about that size in the sample, and the sample has
+# no unshield of about that size at all (so the README shows a lone shield, not a linked pair)
+python3 - "$D" <<'PY' || die "the sample holds an unshield of about 3.73 ZEC: the README example would show a real pair"
+import json, sys
+assert not [e for e in map(json.loads, open(sys.argv[1])) if e["kind"] == "unshield" and abs(e["zat"] - 373_000_000) <= 200_000]
+PY
+printf '3.73\n' | "$BIN" check --unshield - --data "$D" >"$T/c6" 2>&1 || die "check 3.73"
+contract "$T/c6" "check 3.73"
+grep -q '^crowd: k=1 weighted=1\.0 ' "$T/c6" && grep -q '^verdict: RED' "$T/c6" \
+  && grep -Fq '6bdcbce819dd2b5a8e80126f7274d799af98d4d4d426c69b54e67eb4bd0e69b6' "$T/c6" \
+  || die "check 3.73: the README example (k=1 weighted=1.0, RED, one match) changed"
+ok "check: one verdict line and one crowd line each time; 1.0 NO MATCH; 1.2497 k=157 weighted=114.5 GREEN (text and --json); 3.73 k=1 RED; --to a shield source address RED (text and --json overall verdict)"
 
 # report and verify
 "$BIN" report --data "$D" --out "$T/r.html" >/dev/null 2>&1 || die "report"

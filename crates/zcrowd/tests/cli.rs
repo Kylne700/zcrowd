@@ -88,6 +88,13 @@ fn cli_check_shield_mode_and_address_reuse() {
     let (ok, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--data", f], Some(&format!("1\n{a}\n")));
     contract(&out);
     assert!(ok && out.contains("verdict: RED") && out.contains("address: RED") && out.contains("shielded on"), "{out}");
+    // --json carries the same overall verdict (not the amount's GREEN), plus the two parts; no typed value in it
+    let (ok, js, _) = run(&["check", "--unshield", "-", "--to", "-", "--json", "--data", f], Some(&format!("1\n{a}\n")));
+    assert!(ok && js.contains(r#""verdict":"RED""#), "{js}");
+    assert!(js.contains(r#""amount_verdict":"GREEN""#) && js.contains(r#""address_verdict":"RED""#), "{js}");
+    assert!(!js.contains(a), "{js}");
+    let (_, js, _) = run(&["check", "--unshield", "-", "--json", "--data", f], Some("1\n"));
+    assert!(js.contains(r#""verdict":"GREEN""#) && js.contains(r#""address_verdict":null"#), "{js}");
     // the address never appears in the data file or anywhere else we wrote
     assert!(!std::fs::read_to_string(&d).unwrap().contains("t1Zzz"));
     let (_, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--data", f], Some("1\nt1Zzz...bad\n"));

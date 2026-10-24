@@ -69,11 +69,14 @@ pub fn run(a: Args) -> Result<()> {
     let c = score(&events, user, zat, &p);
     let sugg = if matches!(c.verdict, Verdict::Green) { vec![] } else { popular(&events, user, zat, &p, 5) };
     let addr = to.as_deref().map(|t| address_check(&events, t, now));
+    let overall = addr.as_ref().map_or(c.verdict, |f| worse(c.verdict, addr_verdict(f)));
 
     if a.json {
         let v = |x: Verdict| x.to_string();
+        // `verdict` is the overall one, exactly as in the text output (the worse of amount and address)
         let out = json!({
-            "k": c.k, "weighted": c.weighted, "verdict": v(c.verdict), "odd_amount": c.odd_amount,
+            "k": c.k, "weighted": c.weighted, "verdict": v(overall), "odd_amount": c.odd_amount,
+            "amount_verdict": v(c.verdict), "address_verdict": addr.as_ref().map(|f| v(addr_verdict(f))),
             "matches": c.matches.iter().map(|e| &e.txid).collect::<Vec<_>>(),
             "suggestions": sugg.iter().map(|s| json!({"zat": s.zat, "k": s.k, "weighted": s.weighted, "verdict": v(s.verdict)})).collect::<Vec<_>>(),
         });
@@ -136,7 +139,6 @@ pub fn run(a: Args) -> Result<()> {
         (_, Verdict::Green) => "big crowd for amount + timing only, not \"private\"".into(),
         _ => String::new(),
     };
-    let overall = addr.as_ref().map_or(c.verdict, |f| worse(c.verdict, addr_verdict(f)));
     match &addr {
         None => println!("verdict: {overall} - {why}"),
         Some(f) => {

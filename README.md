@@ -11,9 +11,10 @@ AI disclosure: built by Kylne700 with an AI coding assistant (Claude).
 ## 1. The leak
 
 Shielded balances are private. The moment money crosses between the transparent and the shielded pool, the amount and
-the time are public. If you shield 17.53740988 ZEC and later unshield about the same amount, an observer who matches by
-amount sees a single candidate for the other half of the pair. Nothing is broken; the amount is the fingerprint. Whether
-your amount sits in a crowd depends on how many other shields of about that amount came before it.
+the time are public. If you shield 3.73 ZEC and later unshield about 3.73 ZEC, and nobody else shielded about that amount
+in between, an observer who matches by amount sees a single candidate for the other half of the pair. Nothing is
+broken; the amount is the fingerprint. Whether your amount sits in a crowd depends on how many other shields of about
+that amount came before it.
 
 Measured on the committed sample (`fixtures/flows-sample.ndjson`: 6,227 real events, blocks 3494295..3528999, 2026-09-24
 to 2026-10-24). Each of the 1,440 unshields of the last 14 days, scored against the shields of the 14 days before it:
@@ -67,18 +68,18 @@ Other flags: `--shield X` (planning to shield: how many other shields of about X
 ## 3. Fresh data
 
 ```
-cargo run -p zcrowd -- sync          # last 30 days, one lightwalletd server, writes data/flows.ndjson and data/tx/
+cargo run -p zcrowd -- sync          # last 30 days, from the first default lightwalletd server that answers; writes data/flows.ndjson and data/tx/
 ```
 
 Measured here (debug build): a 30-day sync found 198,933 transactions in 34,705 blocks, 6,227 of them crossed the
-turnstile; it took 140 s with 1,406 of those already cached (about 2.5 minutes cold). The raw transaction cache is about
-80 MB for 30 days (measured: 6,227 files, 76 MB of content, about 95 MB of disk with block rounding; the events file adds
-1.5 MB). `sync` stops 10 blocks below the tip (reorg safety), uses at most 8 parallel fetches and one server (`--server`,
-repeatable; the first that answers as mainnet is used; the default list is `zec.rocks`, `na.zec.rocks`,
-`eu.zec.rocks`).
+turnstile; it took 140 s with 1,406 of those already cached (4,821 fetched). A completely cold run fetches all of them:
+its time was not measured (NOT VERIFIED). The raw transaction cache is about 80 MB for 30 days (measured: 6,227 files,
+76 MB of content, about 95 MB of disk with block rounding; the events file adds 1.5 MB). `sync` stops 10 blocks below
+the tip (reorg safety) and uses at most 8 parallel fetches. It takes its data from the first server that answers as
+mainnet (`--server`, repeatable; the default list is `zec.rocks`, `na.zec.rocks`, `eu.zec.rocks`).
 
-Run `sync` on a schedule, not right before you transact: the server sees your IP address and that you run zcrowd (see
-section 6).
+Run `sync` on a schedule, not right before you transact: each server it tries sees your IP address and that you run
+zcrowd (see section 7).
 
 ## 4. How it works
 
@@ -88,7 +89,7 @@ lightwalletd (public, TLS) --compact blocks--> candidates --full raw tx--> event
                                must chain         from the bytes
 ```
 
-1. `sync` asks one server for the compact blocks of the last N days and picks the transactions that cross the
+1. `sync` asks the first server that answers for the compact blocks of the last N days and picks the transactions that cross the
    turnstile: transparent inputs with shielded outputs (shield) or the reverse (unshield). It fetches each one in full,
    recomputes its id from the bytes, and reads the exact net amount from the Sapling and Orchard value balances. Each
    event stores time, height, kind, amount, pool, txid and the transparent addresses involved (all public on the chain).
@@ -107,19 +108,19 @@ and weighs recent matches more. zcrowd measures this and only this.
 
 ## 5. Real output: RED and GREEN
 
-RED (the amount 17.53725988 was picked from the public sample data to show the case; header and footer lines and part of
-the nearby list are left out):
+RED (header and footer lines and part of the nearby list left out). 3.73 ZEC is an ordinary two-decimal amount, and
+only one shield of about that size happened in the 30 days of the sample (the sample holds no unshield of about that
+size, so this example shows no linked pair):
 
 ```
-$ cargo run -p zcrowd -- check --unshield 17.53725988 --data fixtures/flows-sample.ndjson
+$ cargo run -p zcrowd -- check --unshield 3.73 --data fixtures/flows-sample.ndjson
 crowd: k=1 weighted=1.0 (earlier shields of about this amount, allowing for the fee; shields older than 14 days count half)
 matches (newest first, up to 10):
-  2026-10-24 11:35 UTC  1.5 h ago  17.53740988 ZEC  78f128507b5406ee9ab34bb2b965398e28829e797381edb280570232d437894a
+  2026-10-19 13:50 UTC  5.0 days ago  3.73000000 ZEC  6bdcbce819dd2b5a8e80126f7274d799af98d4d4d426c69b54e67eb4bd0e69b6
 verdict: RED - one match: if it is yours you are linked; if not, observers may wrongly link you to it
-note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.
 popular nearby amounts (within 10%, bigger crowd):
-  18.76798549 ZEC -> crowd 15 (weighted 11.5, GREEN)
-  18.76803571 ZEC -> crowd 14 (weighted 11.5, GREEN)
+  3.74975000 ZEC -> crowd 34 (weighted 25.5, GREEN)
+  3.75121300 ZEC -> crowd 21 (weighted 17.5, GREEN)
   do not send several chunks at the same time or to the same address; do not unshield the exact amount you shielded; waiting helps.
 ```
 
@@ -144,8 +145,9 @@ amount: GREEN - big crowd for amount + timing only, not "private"
 address: RED - this address shielded on 2026-10-24 07:26 UTC; unshielding back to it links you directly, whatever the amount
 ```
 
-Every `check` prints exactly one `verdict: ...` line and one `crowd: k=<n> weighted=<w>` line; `--json` has the same
-fields (and never the amount or address you typed).
+Every `check` prints exactly one `verdict: ...` line and one `crowd: k=<n> weighted=<w>` line. `--json` has the same
+fields, with `verdict` the overall one (the worse of amount and address, so RED above, not the amount's GREEN), plus
+`amount_verdict` and `address_verdict`; it never contains the amount or address you typed.
 
 ## 6. Library use in five lines
 
@@ -164,7 +166,7 @@ has no network code in the scoring path: a wallet can call `score` from its send
 
 | Command | Network | What the other side learns |
 |---|---|---|
-| `sync` | one lightwalletd server over TLS | your IP address, the time, that someone runs zcrowd, the block range, the ids of the public transactions it fetches: the same for every user of that range. Nothing about your wallet, amount or addresses. |
+| `sync` | the first default lightwalletd server that answers (each server it tries sees your IP), over TLS | your IP address, the time, that someone runs zcrowd, the block range, the ids of the public transactions it fetches: the same for every user of that range. Nothing about your wallet, amount or addresses. |
 | `check`, `report`, `verify` | none; they have no network code and, on Linux where unprivileged user namespaces are allowed, cut their own network at start (otherwise a note is printed and they continue) | nothing |
 | `web/index.html` | none; its Content-Security-Policy forbids any request | nothing |
 
@@ -188,12 +190,15 @@ bigger: a false GREEN, the worse case). What zcrowd does about it:
   range reaching its requested end. A gap, a mismatch or a truncated answer is an error, not a partial result.
 
 What it cannot do: compact blocks carry no proof of work, so a server that keeps its story consistent is not detected.
-Cross-check what matters:
+The hash chain is checked inside one `sync` run. When a later run extends older data, the link between the two runs is
+not checked (block hashes are not stored), so a different server on the second run is not noticed. Cross-check what
+matters:
 
 1. `zcrowd verify <txid>` re-decodes a cached transaction offline; compare amount and time with a block explorer.
 2. Sync the same range from a second server (`--server https://eu.zec.rocks:443 --out other/flows.ndjson`) and compare
    the two files. On 2026-10-24 a one-day sync from `zec.rocks` and from `eu.zec.rocks` gave byte-identical files
-   (1,297 blocks, 173 events). Whether the two are run by independent operators is NOT VERIFIED.
+   (1,297 blocks, 173 events). Both names are under one domain and are probably one operator, so this is not an
+   independent check: for a real cross-check use a server run by someone else, or your own.
 3. Point `--server` at your own lightwalletd (`http://127.0.0.1:9067` is allowed, nothing else over plain text).
 
 ## 9. Honest limits
@@ -251,5 +256,5 @@ warns on the send screen, pool-aware scoring.
 
 Tor and `torsocks` with `sync`; macOS and Windows; Firefox and Safari for the web demo; release-build performance; the
 coinbase-to-shielded and cross-pool decode paths on real transactions; P2SH input-address detection beyond the sources
-seen in the sample; independence of the public servers; packet-level network behaviour of `sync` (sampled once with `ss`:
+seen in the sample; independence of the public servers; the time of a completely cold 30-day sync; packet-level network behaviour of `sync` (sampled once with `ss`:
 only the chosen server and the DNS resolver were seen).

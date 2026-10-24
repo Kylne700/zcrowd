@@ -20,16 +20,38 @@ not re-run later; lines marked "S5 run" come from the final `bash tests/e2e.sh` 
   suite); identical k, weighted, verdict, suggestions` (7 of 8 deliberate JS mutations caught; the survivor is
   behaviour-equivalent); `HEADLESS OK` (http and file://: 1 request at load, 0 while typing, 5 CSP violations recorded
   for the injected attempts, the static server log shows only `GET /index.html`, storage empty).
-- S5 run (A9, A10, audit, e2e, docs):
+- S5 run (A9, A10, audit, e2e, docs; re-run after the review follow-up commit). Real output of
+  `PLAYWRIGHT_CORE=<playwright-core dir> LIVE=1 bash tests/e2e.sh`, all 30 lines, nothing removed or condensed:
 
 ```
 ok    cargo fmt --check
 ok    cargo clippy --all-targets -D warnings
 ok    cargo test: 30 tests passed, 0 failed
 ok    offline sync from fixtures: 3 events, range ends at tip-10 (3522630), 3 of 3 txids recomputed, 0 mismatches
-ok    report on the committed sample: 1440 unshields in the last 14 days = NO MATCH 828 (57.5%), RED 253 (17.6%)
+ok    check: one verdict line and one crowd line each time; 1.0 NO MATCH; 1.2497 k=157 weighted=114.5 GREEN (text and --json); 3.73 k=1 RED; --to a shield source address RED (text and --json overall verdict)
+ok    report on the committed sample: 1440 unshields in the last 14 days = NO MATCH 828 (57.5%), RED 253 (17.6%), as the README says
+ok    verify of a fixture transaction: MATCH (decoded from the cached raw bytes, offline)
+ok    example five_lines prints: crowd 157 -> GREEN
 ok    LIVE one-day sync: transaction id recomputed from the raw bytes for 173 of 173 candidates, 0 did not match (dropped); block hash chain checked over 1297 blocks
-ok    P1 ... P11 (see docs/PRIVACY.md)
+ok    build
+ok    P1 sync requests depend only on the block range (test sync_requests_depend_only_on_range)
+ok    P2 check, report and verify run with the network removed from outside (unshare -rn)
+ok    P2 check.rs, report.rs and verify.rs import no network code (no source, tonic, tokio, std::net, Lwd, sockets)
+ok    P2 the process cuts its own network: a loopback connection works before and fails after (test sandbox_blocks_connections)
+ok    P3 only ingest.rs (raw cache), report.rs (report) and sync.rs (flows) write files; check.rs and verify.rs cannot
+ok    P3 random address and amount typed via stdin and arguments: not in any file, no file created, address not echoed, not in --json
+ok    P4 no mnemonic, seed, viewing-key or ufvk anywhere in crates/
+ok    P5 336 distinct crates in cargo tree, none of reqwest, sentry, posthog, segment, openssl, native-tls, analytics, telemetry, update; Cargo.lock tracked
+ok    P6 sync --server http://... is refused before any connection (run with the network removed)
+ok    P6 a local TLS server with a self-signed certificate is rejected (invalid peer certificate: UnknownIssuer)
+ok    P7 flows file keys, cache file names and the directory listing contain only public chain fields
+ok    P8 wrong txid dropped and counted, broken prevHash and gaps are errors (tests wrong_or_broken_transactions_are_dropped_counted_and_never_cached, broken_block_chain_is_an_error, block_chain_is_checked_across_request_chunks)
+ok    P9 report HTML has no src, href, url(), http(s), @import or script
+ok    P10 web/index.html: CSP with connect-src, form-action, base-uri none; no external reference; no network, storage or navigation API in its script; no <form>
+ok    P10 PARITY OK: 160 JS-vs-Rust comparisons (38 sample amounts, 20 rejected inputs, synthetic edge suite); identical k, weighted, verdict, suggestions
+ok    P10 web/index.html equals what web/build.mjs builds from the template and the committed sample
+ok    P10 headless Chromium: zero requests while typing, CSP blocks injected fetch, image, beacon, WebSocket and form (http:// and file://)
+ok    P11 no home path, mail address or personal string in tracked or untracked files; 6 commits, one neutral identity; no remote; data/ and target/ ignored
 AUDIT OK
 E2E OK
 ```
@@ -81,6 +103,24 @@ E2E OK
     `check`" (stamp-file test), a leak-detector canary, and runs the plain-text refusal under `unshare -rn`.
 19. Commit trailers: S1..S3 carry the Opus 5.5 co-author trailer, S4 onward the Sonnet 5.5 one (instruction changed
     between stages). Author and committer are the neutral identity in every commit; no remote exists.
+20. Review follow-up (one commit after the S5 commit), real bug: `check --json --to <address>` printed the verdict of the
+    amount alone, so a reused address showed a false GREEN in JSON while the text said RED. Fixed in `check.rs`:
+    `verdict` is now the overall one (the worse of amount and address), and `amount_verdict` and `address_verdict`
+    (null without `--to`) were added. Covered by `cli_check_shield_mode_and_address_reuse` (JSON with `--to` gives
+    RED / GREEN / RED and does not contain the address) and a step in `tests/e2e.sh`. The web parity test is
+    unaffected (no `--to`, so the overall verdict equals the amount verdict).
+21. README examples: the first RED example turned out to be the amount of a real round trip in the sample (an unshield of
+    almost exactly the same amount a few minutes after the shield), and the second pick (a round 3.5 ZEC) also has a
+    later unshield of the same net amount. Both were dropped. The final example, `check --unshield 3.73`, is a lone
+    shield with no unshield of about that size anywhere in the sample; `tests/e2e.sh` asserts that, so the README never
+    shows a linked pair. The web demo's RED example buttons use the newest unique shield minus 15,000 zat; the page holds
+    shield data only (no unshields), so it cannot show a pair either.
+22. README wording: "about 2.5 minutes cold" was removed (never measured; the measured run was 140 s with 1,406 of
+    6,227 transactions already cached, 4,821 fetched). `sync` uses the first default server that answers; each server it
+    tries sees your IP (README section 7, docs/PRIVACY.md), it is not "one server".
+23. Limit added (README section 8, docs/PRIVACY.md): the block hash chain is checked inside one `sync` run. When a later
+    run extends older data, the link between the two runs is not checked (block hashes are not stored), so a different
+    server on a later run is not noticed.
 
 ## NOT VERIFIED
 
@@ -88,8 +128,9 @@ E2E OK
 - Release-build behaviour and speed (only the debug profile was built).
 - Coinbase-to-shielded and cross-pool decode paths on real transactions; P2SH input-address detection beyond the 16 t3
   sources seen in the sample.
-- A lightwalletd server that lies consistently (compact blocks carry no proof of work). Independence of `zec.rocks` and
-  `eu.zec.rocks` (their output was byte-identical once).
+- A lightwalletd server that lies consistently (compact blocks carry no proof of work). Independence of the default
+  servers: `na.zec.rocks` and `eu.zec.rocks` share the domain of `zec.rocks` and are probably one operator (their output
+  was byte-identical once). Cold-sync time (never measured). The link between two sync runs (deviation 23).
 - Packet-level behaviour of `sync`: a live one-day sync was sampled with `ss` (34 polls, filtered to the process id).
   Peers seen: the chosen server on 443 and the DNS resolver on UDP 53. Sampling can miss short-lived sockets. (A first
   attempt filtered by process name also matched the parallel Tor agent's `zcrowd` process: always filter by pid.)

@@ -174,7 +174,7 @@ has no network code in the scoring path: a wallet can call `score` from its send
 
 Every claim has a check that can fail; `docs/PRIVACY.md` lists them one by one with the result. In short:
 what you type is never written, logged or put in `--json` (a fresh random address and amount are searched for in every
-file afterwards); no keys, seeds or viewing keys are read; no analytics, telemetry or update-check crates in the 719-crate
+file afterwards); no keys, seeds or viewing keys are read; no analytics, telemetry or update-check crates in the 525-crate
 tree; the TLS certificate is verified against the webpki roots, plain `http://` is refused except to a lightwalletd on
 this machine, and the audit shows that a self-signed certificate is rejected; `sync` goes through Tor and never falls
 back to a direct connection.
@@ -186,7 +186,8 @@ Tor, using the Rust Tor client (arti) built into zcrowd: no Tor daemon or proxy 
 exit relay instead of your IP address.
 
 - **No fallback.** If Tor cannot start or cannot reach the server, `sync` stops with an error that says so and names
-  `--no-tor`. It does not contact the server and writes nothing. Going direct is always your decision.
+  `--no-tor`. It never contacts the server directly and writes no output (only Tor's own state directory, see below). Going
+  direct is always your decision.
 - **`--no-tor`** is the one way to a direct connection. It prints one warning: the server then sees your IP address and
   that you run zcrowd. Use it for a lightwalletd on this machine (`--server http://127.0.0.1:9067`; Tor refuses
   local-only addresses, and `sync` then stops with the message above) or on a network that blocks Tor. (`--tor` is
@@ -248,7 +249,7 @@ matters:
 ```
 bash tests/e2e.sh     # fmt, clippy -D warnings, all tests, the CLI on the fixtures, then the audit; prints E2E OK
 bash tests/audit.sh   # every privacy claim, one check each (docs/PRIVACY.md); prints AUDIT OK
-LIVE=1 bash tests/audit.sh   # also the live Tor leak check (real network; the whole audit took 54 s here)
+LIVE=1 bash tests/audit.sh   # also the live Tor leak check (real network; the whole audit took 41 to 54 s here)
 ```
 
 - 34 Rust tests: decode of real fixture transactions (shield, unshield, shield with transparent change) and address
@@ -273,7 +274,7 @@ Chromium (from `http://` and `file://`); Firefox and Safari are NOT VERIFIED.
 ## 12. Dependencies, licence, roadmap
 
 Rust 2024 (`cargo`), `zcash_client_backend` (lightwalletd protocol; its `tor` feature brings arti, the Rust Tor client:
-the `cargo tree` crate count went from 336 to 719), `zcash_primitives` / `zcash_transparent` /
+the tree went from 248 to 525 crate versions), `zcash_primitives` / `zcash_transparent` /
 `zcash_address` (transactions, ids, addresses), `tonic` with webpki roots (gRPC over TLS), `tokio`, `clap`,
 `serde_json`, `anyhow`, `rpassword`, `libc`. `Cargo.lock` is committed. MIT, see `LICENSE`.
 

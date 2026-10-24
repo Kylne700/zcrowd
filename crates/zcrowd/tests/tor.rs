@@ -27,7 +27,7 @@ fn offline_sync(extra: &[&str]) -> Output {
 }
 
 // Tor is the default, but there is no network (empty network namespace): sync must fail with a message that names
-// the direct-connection flag, and must not look up or contact the server. The shim logs every name lookup and
+// the direct-connection flag, and must not look up the server or connect to it directly. The shim logs every name lookup and
 // connect; the server name is unresolvable on purpose, so any direct attempt would show up as a lookup.
 #[test]
 fn tor_failure_is_loud_and_never_goes_direct() {
@@ -56,7 +56,7 @@ fn tor_failure_is_loud_and_never_goes_direct() {
             .output()
             .unwrap();
         assert_eq!(o.status.code(), Some(1), "{tag}: {}", String::from_utf8_lossy(&o.stderr));
-        assert!(!d.join(tag).exists(), "{tag}: a failed sync must write nothing");
+        assert!(!d.join(tag).exists(), "{tag}: a failed sync must write no output");
         (String::from_utf8_lossy(&o.stderr).into_owned(), std::fs::read_to_string(&log).unwrap_or_default())
     };
 

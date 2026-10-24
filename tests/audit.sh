@@ -232,7 +232,7 @@ ok "P11 no home path, mail address or personal string in tracked or untracked fi
 # T1-T7: sync goes through Tor by default and never falls back to a direct connection
 if unshare -rn true 2>/dev/null && command -v cc >/dev/null; then
   must_pass "T1/T2/T5/T7 Tor tests" cargo test -q -p zcrowd --test tor
-  ok "T1/T2/T5/T7 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes nothing; --no-tor is the control the shim sees; also flag conflicts, plain-text URL refused before Tor starts, --end-height reorg margin (crates/zcrowd/tests/tor.rs)"
+  ok "T1/T2/T5/T7 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes no output; --no-tor is the control the shim sees; also flag conflicts, plain-text URL refused before Tor starts, --end-height reorg margin (crates/zcrowd/tests/tor.rs)"
 else
   skip "T1/T2/T5/T7 Tor failure test (needs unshare -rn and a C compiler for the leak-check shim)"
 fi

@@ -183,7 +183,9 @@ pub fn run(a: Args) -> Result<()> {
             "other shields and moves into it of about this amount, the decoys for a later unshield of the whole note",
         )
     };
-    // The amount typed is never printed back: it may sit in a terminal's scrollback or a CI log.
+    // The amount typed is never printed back: it may sit in a terminal's scrollback or a CI log. What is printed below is derived
+    // from it, though: the amounts and txids of the matches (an unshield's lie within the fee allowance above the typed amount, so
+    // they give it away to about 0.0005 ZEC) and the nearby amounts, so the output is as sensitive as the amount (research/46 F3).
     println!(
         "check: {what}; pool {}; fee allowance {} zat, tolerance {} zat, lookback {} days",
         if a.pool == PoolArg::Any {

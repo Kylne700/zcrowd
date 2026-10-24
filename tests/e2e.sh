@@ -136,7 +136,7 @@ ok "example five_lines prints: crowd 592 -> GREEN"
 
 if [ "${LIVE:-}" = 1 ]; then
   mkdir -p "$T/live"
-  "$BIN" sync --days 1 --out "$T/live/flows.ndjson" >"$T/live.out" 2>&1 || { cat "$T/live.out" >&2; die "LIVE sync"; }
+  "$BIN" sync --days 1 --tor-dir "$T/tor" --out "$T/live/flows.ndjson" >"$T/live.out" 2>&1 || { cat "$T/live.out" >&2; die "LIVE sync"; }
   grep -Eq '^integrity: .* for ([0-9]+) of \1 candidates, 0 did not match .*block hash chain checked over [0-9]+ blocks' "$T/live.out" \
     || { cat "$T/live.out" >&2; die "LIVE sync: integrity line"; }
   printf '1.0\n' | "$BIN" check --unshield - --data "$T/live/flows.ndjson" >"$T/live.chk" 2>&1 || die "LIVE check"

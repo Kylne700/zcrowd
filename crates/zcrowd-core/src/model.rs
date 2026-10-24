@@ -240,7 +240,18 @@ pub fn sig_decimals(zat: u64) -> usize {
 
 pub fn read_ndjson(path: &std::path::Path) -> Result<Vec<Event>> {
     let text = std::fs::read_to_string(path)?;
-    text.lines().filter(|l| !l.trim().is_empty()).map(|l| Ok(serde_json::from_str(l)?)).collect()
+    // numbered before the blank lines are dropped: the number in an error is the line of the file
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(i, l)| serde_json::from_str(l).map_err(|e| bad_line(i + 1, &e)))
+        .collect()
+}
+
+/// serde reports the position inside the one line it was given (always "line 1"): say the line of the file instead (research/46 F8).
+fn bad_line(n: usize, e: &serde_json::Error) -> anyhow::Error {
+    let s = e.to_string();
+    anyhow::anyhow!("line {n}, column {}: {}", e.column(), s.rsplit_once(" at line ").map_or(s.as_str(), |(msg, _)| msg))
 }
 
 pub fn coinbase_tag(e: &Event) -> String {

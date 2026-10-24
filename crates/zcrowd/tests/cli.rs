@@ -641,6 +641,20 @@ fn report_counts_the_no_match_unshields_out_of_an_orchard_nothing_can_enter() {
     assert!(!html.contains("left Orchard"), "{html}");
 }
 
+/// research/46 F8: serde's position is inside the one line it was given, so a damaged line 4 of the file used to be reported as "line 1".
+/// The blank line is there to show that the number is the file's line, not the count of events.
+#[test]
+fn a_damaged_event_line_is_reported_with_its_line_number_in_the_file() {
+    let good = line("shield", 100_000_000, 1, "");
+    let d = data_file("cli-damaged-line.ndjson", &[good.clone(), String::new(), good, r#"{"h":3500002,"t":"#.into()]);
+    let f = d.to_str().unwrap();
+    let html = d.with_extension("html");
+    for args in [vec!["check", "--unshield", "-", "--data", f], vec!["report", "--data", f, "--out", html.to_str().unwrap()]] {
+        let (ok, _, err) = run(&args, Some("1.0\n"));
+        assert!(!ok && err.contains("line 4") && !err.contains("at line 1"), "{} -> {err}", args[0]);
+    }
+}
+
 const OTHER_VERSION: &str = "data from another zcrowd version: run `zcrowd sync` again";
 
 // Data of another zcrowd (no version, or a different one) or cut off before its meta was written is never trusted.

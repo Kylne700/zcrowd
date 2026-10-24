@@ -446,6 +446,7 @@ fn sync_reports_its_progress_on_stderr_with_heights_and_counts_only() {
         assert!(err.contains(want), "missing {want:?}:\n{err}");
     }
     assert!(!out.contains("sync:"), "progress belongs on stderr, stdout keeps its lines: {out}");
+    assert!(!err.contains("still fetching"), "a sync that is not slow adds no status line:\n{err}");
     let long_hex = |l: &str| l.split(|c: char| !c.is_ascii_hexdigit()).any(|w| w.len() >= 20);
     assert!(!err.lines().filter(|l| l.starts_with("sync:")).any(long_hex), "a progress line carries a transaction id:\n{err}");
 }

@@ -61,6 +61,11 @@ pub trait BlockSource {
     async fn tree_sizes(&self, _h: u64) -> Result<Option<[u64; 3]>> {
         Ok(None)
     }
+    /// Blocks received so far by all `blocks` calls, also from one still running: for a progress line. 0 for a source that
+    /// does not count.
+    fn blocks_seen(&self) -> u64 {
+        0
+    }
     /// True for a server: every requested height must come back, linked by block hashes.
     /// False for sparse fixtures.
     fn strict_chain(&self) -> bool {
@@ -97,6 +102,8 @@ pub struct Lwd {
     client: LwdClient,
     /// Raw transactions are spread over these connections (the first one is among them).
     pool: Box<Pool<LwdClient>>, // boxed: a Lwd is a variant of an enum in main.rs
+    /// Blocks received by `blocks` so far, for the progress line of a crawl that is one long call.
+    seen: Arc<AtomicU64>,
     pub url: String,
     /// True when every byte to the server goes through Tor.
     pub tor: bool,
@@ -462,7 +469,7 @@ impl Lwd {
         let client = connect().await?;
         let (size, max_age) = if tor.is_some() { (CONNECTIONS, CONNECTION_MAX_AGE) } else { (1, Duration::from_secs(86_400)) };
         let pool = Box::new(Pool::start(size, max_age, client.clone(), connect).await);
-        Ok(Lwd { client, pool, url: url.to_string(), tor: tor.is_some() })
+        Ok(Lwd { client, pool, seen: Arc::default(), url: url.to_string(), tor: tor.is_some() })
     }
 }
 
@@ -505,15 +512,28 @@ impl BlockSource for Lwd {
     async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
         read_blocks(start, end, STREAM_IDLE, STREAM_BACKOFF, |from| {
             let mut c = self.client.clone();
+            let seen = self.seen.clone();
             let range = BlockRange {
                 start: Some(BlockId { height: from, hash: vec![] }),
                 end: Some(BlockId { height: end, hash: vec![] }),
                 // Every pool: an Ironwood-only transaction is invisible otherwise.
                 pool_types: [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard, PoolType::Ironwood].map(|p| p as i32).to_vec(),
             };
-            async move { Ok::<_, tonic::Status>(c.get_block_range(range).await?.into_inner().map(|b| b.map(|b| summarize(&b)))) }
+            async move {
+                let blocks = c.get_block_range(range).await?.into_inner();
+                Ok::<_, tonic::Status>(blocks.map(move |b| {
+                    b.map(|b| {
+                        seen.fetch_add(1, Relaxed);
+                        summarize(&b)
+                    })
+                }))
+            }
         })
         .await
+    }
+
+    fn blocks_seen(&self) -> u64 {
+        self.seen.load(Relaxed)
     }
 
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {

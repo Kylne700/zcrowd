@@ -1,14 +1,16 @@
 use crate::Src;
 use anyhow::Result;
-use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
-use zcrowd_core::ingest::{candidates, resolve};
-use zcrowd_core::model::{Event, read_ndjson};
+use zcrowd_core::Kind;
+use zcrowd_core::ingest::{RawCache, candidates, resolve};
+use zcrowd_core::model::{Coverage, Event, read_coverage, read_ndjson};
 use zcrowd_core::source::BlockSource;
 
 const BLOCKS_PER_DAY: u64 = 1152; // 75 s blocks
+/// Stay this far behind the tip so a reorg cannot leave us with blocks that no longer exist.
+const REORG_MARGIN: u64 = 10;
 
 pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurrency: usize) -> Result<()> {
     match src {
@@ -22,35 +24,48 @@ pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurr
 
 async fn go<S: BlockSource>(s: &S, days: u64, out: &Path, candidates_only: bool, concurrency: usize) -> Result<()> {
     let t0 = Instant::now();
-    let tip = s.tip().await?;
-    let start = tip.saturating_sub(days * BLOCKS_PER_DAY);
-    let (cands, st) = candidates(s, start, tip).await?;
+    let end = s.tip().await?.saturating_sub(REORG_MARGIN);
+    // 144 extra blocks (~3 h) so the window is not a hair short of `days`.
+    let start = end.saturating_sub(days * BLOCKS_PER_DAY + 144);
+    let (cands, st) = candidates(s, start, end).await?;
     println!(
-        "blocks={} txs={} shield_like={} unshield_like={} range={}..{} secs={:.1}",
-        st.blocks, st.txs, st.shield_like, st.unshield_like, start, tip, t0.elapsed().as_secs_f32()
+        "blocks={} txs={} shield_like={} (coinbase {}) unshield_like={} range={}..{} secs={:.1}",
+        st.blocks,
+        st.txs,
+        st.shield_like,
+        st.coinbase_like,
+        st.unshield_like,
+        start,
+        end,
+        t0.elapsed().as_secs_f32()
     );
     if candidates_only {
         return Ok(());
     }
-    if let Some(d) = out.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    let mut events: Vec<Event> = if out.exists() { read_ndjson(out)? } else { vec![] };
-    let have: HashSet<String> = events.iter().map(|e| e.txid.clone()).collect();
-    // Append as we go so an interrupted run resumes where it stopped.
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(out)?;
-    let mut new = 0;
-    let fetched = resolve(s, &cands, &have, concurrency, |ev| {
-        writeln!(f, "{}", serde_json::to_string(&ev)?)?;
-        events.push(ev);
-        new += 1;
-        Ok(())
-    })
-    .await?;
-    drop(f);
-    // Canonical order, one line per txid: re-running is idempotent.
+    let Some(new_cov) = st.coverage else { anyhow::bail!("server returned no blocks") };
+    let dir = out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let cache = RawCache(dir.join("tx"));
+    let r = resolve(s, &cands, &cache, concurrency).await?;
+
+    // Merge into any existing file: events inside the new range are replaced, older ones kept
+    // when the ranges touch; a gap would make the coverage claim false, so then the old data is dropped.
+    let old: Vec<Event> = if out.exists() { read_ndjson(out)? } else { vec![] };
+    let old_cov = read_coverage(out);
+    let (mut events, cov) = match old_cov {
+        Some(oc) if oc.overlaps(&new_cov) => {
+            (old.into_iter().filter(|e| e.h < new_cov.first_h || e.h > new_cov.last_h).collect(), oc.union(new_cov))
+        }
+        Some(_) => {
+            eprintln!("note: new range does not touch the existing data; replacing it");
+            (vec![], new_cov)
+        }
+        None => (vec![], new_cov),
+    };
+    events.extend(r.events);
     events.sort_by(|a, b| (a.h, &a.txid).cmp(&(b.h, &b.txid)));
     events.dedup_by(|a, b| a.txid == b.txid);
+
     let tmp = out.with_extension("tmp");
     let mut w = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
     for e in &events {
@@ -58,13 +73,24 @@ async fn go<S: BlockSource>(s: &S, days: u64, out: &Path, candidates_only: bool,
     }
     w.flush()?;
     std::fs::rename(&tmp, out)?;
-    let sh = events.iter().filter(|e| e.kind == zcrowd_core::Kind::Shield).count();
+    std::fs::write(Coverage::path_for(out), serde_json::to_vec(&cov)?)?;
+
+    let sh = events.iter().filter(|e| e.kind == Kind::Shield).count();
+    let low = events.iter().filter(|e| e.confidence == zcrowd_core::Confidence::Low).count();
     println!(
-        "fetched_txs={fetched} new_events={new} total_events={} shields={sh} unshields={} secs={:.1}",
+        "events={} shields={sh} unshields={} fetched_txs={} cached_txs={} secs={:.1}",
         events.len(),
         events.len() - sh,
+        r.fetched,
+        r.from_cache,
         t0.elapsed().as_secs_f32()
     );
-    println!("wrote {}", out.display());
+    let skipped: Vec<String> = r.skipped.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    println!(
+        "excluded: {} ambiguous_cross_pool(kept, low confidence, not counted in crowds)={low}",
+        if skipped.is_empty() { "none".into() } else { skipped.join(" ") }
+    );
+    println!("wrote {} (raw transactions cached in {})", out.display(), cache.0.display());
+    println!("tip: sync on a schedule, not right before you transact. The server sees your IP and that you run zcrowd, nothing about your wallet; use Tor or a VPN at system level.");
     Ok(())
 }

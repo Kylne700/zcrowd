@@ -32,7 +32,6 @@ pub trait BlockSource {
     async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>>;
     /// Raw transaction bytes and the height it was mined at.
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)>;
-    async fn block_time(&self, height: u64) -> Result<u64>;
 }
 
 pub fn txid_to_wire(display: &str) -> Result<Vec<u8>> {
@@ -155,19 +154,9 @@ impl BlockSource for Lwd {
         .into_inner();
         Ok((r.data, r.height))
     }
-
-    async fn block_time(&self, height: u64) -> Result<u64> {
-        let b = retry("get_block", || {
-            let mut c = self.client.clone();
-            async move { c.get_block(BlockId { height, hash: vec![] }).await }
-        })
-        .await?
-        .into_inner();
-        Ok(b.time as u64)
-    }
 }
 
-/// Offline source: `blocks-*.json` (Vec<BlockSummary>) and `tx-<txid>.hex` files in a directory.
+/// Offline source: `blocks-*.json` (Vec<BlockSummary>) and `raw/<txid>.hex` files in a directory.
 pub struct Fixtures {
     dir: PathBuf,
     blocks: Vec<BlockSummary>,
@@ -202,10 +191,37 @@ impl BlockSource for Fixtures {
             .find(|b| b.txs.iter().any(|t| t.txid == txid))
             .map(|b| b.h)
             .ok_or_else(|| anyhow!("txid not in fixture blocks"))?;
-        let text = std::fs::read_to_string(self.dir.join(format!("tx-{txid}.hex")))?;
+        let text = std::fs::read_to_string(self.dir.join("raw").join(format!("{txid}.hex")))?;
         Ok((hex::decode(text.trim())?, h))
     }
-    async fn block_time(&self, height: u64) -> Result<u64> {
-        self.blocks.iter().find(|b| b.h == height).map(|b| b.t).ok_or_else(|| anyhow!("height not in fixtures"))
+}
+
+/// Test helper: wraps a source and logs every request it makes (kind and arguments).
+pub struct Recording<S> {
+    pub inner: S,
+    pub log: std::sync::Mutex<Vec<String>>,
+}
+
+impl<S> Recording<S> {
+    pub fn new(inner: S) -> Self {
+        Recording { inner, log: Default::default() }
+    }
+    fn note(&self, s: String) {
+        self.log.lock().unwrap().push(s);
+    }
+}
+
+impl<S: BlockSource> BlockSource for Recording<S> {
+    async fn tip(&self) -> Result<u64> {
+        self.note("tip".into());
+        self.inner.tip().await
+    }
+    async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
+        self.note(format!("blocks {start}-{end}"));
+        self.inner.blocks(start, end).await
+    }
+    async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
+        self.note(format!("tx {txid}"));
+        self.inner.raw_tx(txid).await
     }
 }

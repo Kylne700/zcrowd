@@ -57,23 +57,14 @@ enum Cmd {
         #[arg(long, default_value = "data/flows.ndjson")]
         data: PathBuf,
     },
-    /// Re-fetch one transaction and recompute its event (contacts the server; txid is public data).
+    /// Recompute one event from the raw transaction cached by `sync` (offline).
     Verify {
         txid: String,
-        #[arg(long)]
-        server: Vec<String>,
         #[arg(long, default_value = "data/flows.ndjson")]
         data: PathBuf,
-    },
-    /// Developer: write a fixture slice (blocks + candidate tx hex) for one height.
-    #[command(hide = true)]
-    Fixture {
+        /// Directory of cached raw transactions (default: `tx/` next to the data file).
         #[arg(long)]
-        height: u64,
-        #[arg(long, default_value = "fixtures")]
-        dir: PathBuf,
-        #[arg(long)]
-        server: Vec<String>,
+        raw_dir: Option<PathBuf>,
     },
 }
 
@@ -102,7 +93,6 @@ async fn main() -> Result<()> {
             check::run(unshield, shield, amount_stdin, lookback_days, tolerance_zat, &data)
         }
         Cmd::Report { out, data } => report::run(&out, &data),
-        Cmd::Verify { txid, server, data } => verify::run(open_source(server).await?, &txid, &data).await,
-        Cmd::Fixture { height, dir, server } => verify::fixture(open_source(server).await?, height, &dir).await,
+        Cmd::Verify { txid, data, raw_dir } => verify::run(&txid, &data, raw_dir.as_deref()),
     }
 }

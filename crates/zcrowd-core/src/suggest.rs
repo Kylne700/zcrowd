@@ -28,7 +28,7 @@ mod tests {
     use crate::model::{Pool, ZAT_PER_ZEC};
     #[test]
     fn suggestions_not_smaller() {
-        let mk = |zat, i: u64| Event { h: 1, t: 1000 + i, kind: Kind::Shield, zat, pool: Pool::Orchard, fee_zat: None, n_tin: 1, n_tout: 0, txid: format!("{zat}{i}"), confidence: Confidence::High };
+        let mk = |zat, i: u64| Event { h: 1, t: 1000 + i, kind: Kind::Shield, zat, pool: Pool::Orchard, fee_zat: None, n_tin: 1, n_tout: 0, txid: format!("{zat}{i}"), confidence: Confidence::High, coinbase: false, src: vec![], dst: vec![] };
         let mut evs: Vec<Event> = (0..20).map(|i| mk(ZAT_PER_ZEC, i)).collect();
         evs.extend((0..3).map(|i| mk(ZAT_PER_ZEC * 105 / 100, i)));
         let p = Params { lookback_days: 30, tol_zat: 0, now: 5000 };

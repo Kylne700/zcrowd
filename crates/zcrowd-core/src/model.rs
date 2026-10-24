@@ -32,7 +32,8 @@ pub enum Confidence {
     Low,
 }
 
-/// One public turnstile crossing. `zat` is the amount that crossed (see decode.rs).
+/// One public turnstile crossing. `zat` is the net amount that crossed the turnstile
+/// (shield: value entering the shielded pools; unshield: value leaving them, fee included).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub h: u64,
@@ -45,6 +46,62 @@ pub struct Event {
     pub n_tout: usize,
     pub txid: String,
     pub confidence: Confidence,
+    /// Shielded coinbase (block reward shielded by the miner).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub coinbase: bool,
+    /// Transparent input addresses of a shield (public chain data; unknown script shapes omitted).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub src: Vec<String>,
+    /// Transparent output addresses of an unshield.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dst: Vec<String>,
+}
+
+/// Block range and time span a data file covers (written by `sync`, next to the events).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Coverage {
+    pub first_h: u64,
+    pub first_t: u64,
+    pub last_h: u64,
+    pub last_t: u64,
+}
+
+impl Coverage {
+    pub fn path_for(data: &std::path::Path) -> std::path::PathBuf {
+        data.with_extension("meta.json")
+    }
+
+    pub fn union(self, o: Coverage) -> Coverage {
+        Coverage {
+            first_h: self.first_h.min(o.first_h),
+            first_t: self.first_t.min(o.first_t),
+            last_h: self.last_h.max(o.last_h),
+            last_t: self.last_t.max(o.last_t),
+        }
+    }
+
+    pub fn overlaps(&self, o: &Coverage) -> bool {
+        self.first_h <= o.last_h + 1 && o.first_h <= self.last_h + 1
+    }
+}
+
+/// Days since 1970-01-01 to (year, month, day), proleptic Gregorian (Hinnant's algorithm).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+pub fn fmt_utc(t: u64) -> String {
+    let (y, m, d) = civil_from_days((t / 86_400) as i64);
+    let s = t % 86_400;
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", s / 3600, s % 3600 / 60)
 }
 
 pub const ZAT_PER_ZEC: u64 = 100_000_000;
@@ -87,9 +144,20 @@ pub fn read_ndjson(path: &std::path::Path) -> Result<Vec<Event>> {
         .collect()
 }
 
+pub fn read_coverage(data: &std::path::Path) -> Option<Coverage> {
+    serde_json::from_slice(&std::fs::read(Coverage::path_for(data)).ok()?).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dates() {
+        assert_eq!(fmt_utc(0), "1970-01-01 00:00 UTC");
+        assert_eq!(fmt_utc(1_792_240_286), "2026-10-17 12:31 UTC");
+        assert_eq!(fmt_utc(951_782_400), "2000-02-29 00:00 UTC");
+    }
+
     #[test]
     fn parse() {
         assert_eq!(parse_zec("1").unwrap(), 100_000_000);
@@ -101,7 +169,15 @@ mod tests {
         assert!(parse_zec("abc").is_err());
         assert!(parse_zec("").is_err());
         assert!(parse_zec(".").is_err());
+        // E9: strict grammar
+        for bad in ["1e3", "+1", "1,5", "1 2", "١٢", "0.000000001", "21000000.00000001", "0.0", "-0.5"] {
+            assert!(parse_zec(bad).is_err(), "{bad}");
+        }
+        assert_eq!(parse_zec("1.").unwrap(), 100_000_000);
+        assert_eq!(parse_zec(".5").unwrap(), 50_000_000);
+        assert_eq!(parse_zec("21000000").unwrap(), 21_000_000 * 100_000_000);
         assert_eq!(sig_decimals(parse_zec("1.0001").unwrap()), 4);
         assert_eq!(sig_decimals(parse_zec("1.23456789").unwrap()), 8);
     }
 }
+

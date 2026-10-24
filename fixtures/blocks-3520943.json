@@ -1,0 +1,36 @@
+[
+  {
+    "h": 3520943,
+    "t": 1792240286,
+    "txs": [
+      {
+        "txid": "11272ac21999e0e2e50a52c9868bcbac50f138c95ea028b341cc0881e83f4d44",
+        "n_vin": 0,
+        "n_vout": 2,
+        "shielded": false,
+        "coinbase": false
+      },
+      {
+        "txid": "486a00611eb3c9f1bcce0ec39c423b04787a2f121d544aeffde3c440ccb71a76",
+        "n_vin": 0,
+        "n_vout": 1,
+        "shielded": true,
+        "coinbase": false
+      },
+      {
+        "txid": "f718677907fbc847f453507225274a670a91a72f02e69842dd33e07c245b7284",
+        "n_vin": 1,
+        "n_vout": 2,
+        "shielded": false,
+        "coinbase": false
+      },
+      {
+        "txid": "0e8087743f3b725dcddca22e880777006ec94363a206a1d28c4dabbdb0dc8f5b",
+        "n_vin": 1,
+        "n_vout": 0,
+        "shielded": false,
+        "coinbase": false
+      }
+    ]
+  }
+]

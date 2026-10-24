@@ -76,7 +76,7 @@ mod tests {
     use crate::model::{Pool, ZAT_PER_ZEC};
 
     fn ev(kind: Kind, zat: u64, t: u64) -> Event {
-        Event { h: 1, t, kind, zat, pool: Pool::Sapling, fee_zat: None, n_tin: 1, n_tout: 0, txid: format!("{t}-{zat}"), confidence: Confidence::High }
+        Event { h: 1, t, kind, zat, pool: Pool::Sapling, fee_zat: None, n_tin: 1, n_tout: 0, txid: format!("{t}-{zat}"), confidence: Confidence::High, coinbase: false, src: vec![], dst: vec![] }
     }
     const NOW: u64 = 100 * DAY;
     fn p(tol: u64) -> Params {

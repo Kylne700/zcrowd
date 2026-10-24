@@ -175,6 +175,7 @@ fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
 // Spec 41 C3: the process cuts its own network. A listener on loopback is reachable from this process
 // but not after the probe enters a fresh network namespace.
 #[test]
+#[cfg(target_os = "linux")] // other OSes have no sandbox (src/sandbox.rs)
 fn sandbox_blocks_connections() {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap().to_string();

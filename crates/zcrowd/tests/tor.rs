@@ -12,6 +12,7 @@ fn scratch(name: &str) -> PathBuf {
     d
 }
 
+#[cfg(target_os = "linux")] // only the Linux-only test below uses it
 fn ok(c: &mut Command) -> bool {
     c.output().is_ok_and(|o| o.status.success())
 }
@@ -30,6 +31,7 @@ fn offline_sync(extra: &[&str]) -> Output {
 // the direct-connection flag, and must not look up the server or connect to it directly. The shim logs every name lookup and
 // connect; the server name is unresolvable on purpose, so any direct attempt would show up as a lookup.
 #[test]
+#[cfg(target_os = "linux")] // needs unshare, cc and LD_PRELOAD
 fn tor_failure_is_loud_and_never_goes_direct() {
     if !ok(Command::new("unshare").args(["-rn", "true"])) {
         eprintln!("SKIPPED: cannot create a network namespace here");

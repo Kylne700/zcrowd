@@ -68,18 +68,20 @@ Other flags: `--shield X` (planning to shield: how many other shields of about X
 ## 3. Fresh data
 
 ```
-cargo run -p zcrowd -- sync          # last 30 days, from the first default lightwalletd server that answers; writes data/flows.ndjson and data/tx/
+cargo run -p zcrowd -- sync          # last 30 days, over Tor, from the first default lightwalletd server that answers; writes data/flows.ndjson and data/tx/
 ```
 
-Measured here (debug build): a 30-day sync found 198,933 transactions in 34,705 blocks, 6,227 of them crossed the
-turnstile; it took 140 s with 1,406 of those already cached (4,821 fetched). A completely cold run fetches all of them:
-its time was not measured (NOT VERIFIED). The raw transaction cache is about 80 MB for 30 days (measured: 6,227 files,
+Measured here (debug build, direct connection, before Tor was the default): a 30-day sync found 198,933 transactions in
+34,705 blocks, 6,227 of them crossed the turnstile; it took 140 s with 1,406 of those already cached (4,821 fetched). A
+completely cold run fetches all of them: its time was not measured (NOT VERIFIED). A 30-day sync over Tor was not
+measured either (NOT VERIFIED); a one-day sync took 20 to 40 s over Tor against 6.6 s direct (section 7). The raw
+transaction cache is about 80 MB for 30 days (measured: 6,227 files,
 76 MB of content, about 95 MB of disk with block rounding; the events file adds 1.5 MB). `sync` stops 10 blocks below
 the tip (reorg safety) and uses at most 8 parallel fetches. It takes its data from the first server that answers as
 mainnet (`--server`, repeatable; the default list is `zec.rocks`, `na.zec.rocks`, `eu.zec.rocks`).
 
-Run `sync` on a schedule, not right before you transact: each server it tries sees your IP address and that you run
-zcrowd (see section 7).
+Run `sync` on a schedule, not right before you transact. By default it goes through Tor, so the server does not see
+your IP address; with `--no-tor` it does, and sees that you run zcrowd (see "Network privacy" in section 7).
 
 ## 4. How it works
 
@@ -166,18 +168,41 @@ has no network code in the scoring path: a wallet can call `score` from its send
 
 | Command | Network | What the other side learns |
 |---|---|---|
-| `sync` | the first default lightwalletd server that answers (each server it tries sees your IP), over TLS | your IP address, the time, that someone runs zcrowd, the block range, the ids of the public transactions it fetches: the same for every user of that range. Nothing about your wallet, amount or addresses. |
+| `sync` | the first default lightwalletd server that answers, over TLS, through Tor (built into the process); only with `--no-tor` directly | the time, that someone runs zcrowd, the block range, the ids of the public transactions it fetches: the same for every user of that range. Your IP address only with `--no-tor`. Nothing about your wallet, amount or addresses. |
 | `check`, `report`, `verify` | none; they have no network code and, on Linux where unprivileged user namespaces are allowed, cut their own network at start (otherwise a note is printed and they continue) | nothing |
 | `web/index.html` | none; its Content-Security-Policy forbids any request | nothing |
 
 Every claim has a check that can fail; `docs/PRIVACY.md` lists them one by one with the result. In short:
 what you type is never written, logged or put in `--json` (a fresh random address and amount are searched for in every
-file afterwards); no keys, seeds or viewing keys are read; no analytics, telemetry or update-check crates in the 336-crate
+file afterwards); no keys, seeds or viewing keys are read; no analytics, telemetry or update-check crates in the 719-crate
 tree; the TLS certificate is verified against the webpki roots, plain `http://` is refused except to a lightwalletd on
-this machine, and the audit shows that a self-signed certificate is rejected.
+this machine, and the audit shows that a self-signed certificate is rejected; `sync` goes through Tor and never falls
+back to a direct connection.
 
-The server still sees your IP address when you `sync`. Sync on a schedule, through a VPN or Tor at system level
-(`torsocks` use is NOT VERIFIED). Built-in Tor support is not part of this version.
+### Network privacy
+
+`sync` is the only command that uses the network. By default all of its traffic to the lightwalletd server goes through
+Tor, using the Rust Tor client (arti) built into zcrowd: no Tor daemon or proxy to install, and the server sees a Tor
+exit relay instead of your IP address.
+
+- **No fallback.** If Tor cannot start or cannot reach the server, `sync` stops with an error that says so and names
+  `--no-tor`. It does not contact the server and writes nothing. Going direct is always your decision.
+- **`--no-tor`** is the one way to a direct connection. It prints one warning: the server then sees your IP address and
+  that you run zcrowd. Use it for a lightwalletd on this machine (`--server http://127.0.0.1:9067`; Tor refuses
+  local-only addresses, and `sync` then stops with the message above) or on a network that blocks Tor. (`--tor` is
+  accepted and changes nothing.)
+- **Tor state** lives in `$XDG_CACHE_HOME/zcrowd/tor`, else `~/.cache/zcrowd/tor` (`--tor-dir` changes it), outside the
+  repository. It holds only what Tor keeps itself: the public relay directory and guard state, about 39 MB, downloaded
+  on the first run. The check lists its files and finds no mention of the server in them.
+- **Cost:** a one-day sync took 20 to 40 s over Tor against 6.6 s direct (nine Tor runs, debug build; the first run
+  downloads the relay directory).
+- **Not hidden:** your network provider sees that you use Tor. The exit relay sees which server you contact and when, not
+  what you ask for (the TLS session is between you and the server). Someone who watches both ends can still match
+  timing, so keep syncing on a schedule, not right before you transact. The default servers are probably one operator.
+- **Checks:** `bash tests/audit.sh` runs the failure tests. `LIVE=1 bash tests/audit.sh`, or `bash
+  tests/leakcheck/run.sh`, also syncs a real range under a small C interposer (`tests/leakcheck/`) that records every
+  name lookup and connection: the direct sync is seen looking up and connecting to the server, the Tor sync is not, and
+  both write byte-identical files. One check per claim (T1 to T7) in `docs/PRIVACY.md`.
 
 ## 8. Trust: the lightwalletd server is not trusted
 
@@ -199,7 +224,8 @@ matters:
    the two files. On 2026-10-24 a one-day sync from `zec.rocks` and from `eu.zec.rocks` gave byte-identical files
    (1,297 blocks, 173 events). Both names are under one domain and are probably one operator, so this is not an
    independent check: for a real cross-check use a server run by someone else, or your own.
-3. Point `--server` at your own lightwalletd (`http://127.0.0.1:9067` is allowed, nothing else over plain text).
+3. Point `--server` at your own lightwalletd (`http://127.0.0.1:9067` is allowed, nothing else over plain text; add
+   `--no-tor`, because Tor refuses local-only addresses).
 
 ## 9. Honest limits
 
@@ -222,17 +248,19 @@ matters:
 ```
 bash tests/e2e.sh     # fmt, clippy -D warnings, all tests, the CLI on the fixtures, then the audit; prints E2E OK
 bash tests/audit.sh   # every privacy claim, one check each (docs/PRIVACY.md); prints AUDIT OK
+LIVE=1 bash tests/audit.sh   # also the live Tor leak check (real network; the whole audit took 54 s here)
 ```
 
-- 30 Rust tests: decode of real fixture transactions (shield, unshield, shield with transparent change) and address
+- 34 Rust tests: decode of real fixture transactions (shield, unshield, shield with transparent change) and address
   shapes including TEX, scoring (send-max round
   trip, NO MATCH, 12 shields GREEN, window and future exclusion, address reuse, widening never lowers k), amount parsing
   (rejects `1e3`, `+1`, `1,5`, unicode digits, more than 8 decimals, 0, more than 21M), request independence, integrity
-  and chain-break handling, the sandbox.
+  and chain-break handling, the sandbox, and four Tor tests (a Tor sync that cannot start never goes direct, flag
+  conflicts, the reorg margin of `--end-height`, a plain-text URL is refused before Tor starts).
 - Mutation checks while building: removing the txid check, the previous-hash check, the end-of-range check, trusting the
   cache, or caching a bad transaction each makes a test fail.
 - `AUDIT OK` with one headless-browser step needs `PLAYWRIGHT_CORE=<playwright-core dir>` and a Chromium binary; without
-  it that step prints `SKIP ... (NOT VERIFIED)`.
+  it that step prints `SKIP ... (NOT VERIFIED)`; so does the live Tor leak check without `LIVE=1`.
 
 ## 11. Web demo
 
@@ -244,17 +272,22 @@ Chromium (from `http://` and `file://`); Firefox and Safari are NOT VERIFIED.
 
 ## 12. Dependencies, licence, roadmap
 
-Rust 2024 (`cargo`), `zcash_client_backend` (lightwalletd protocol), `zcash_primitives` / `zcash_transparent` /
+Rust 2024 (`cargo`), `zcash_client_backend` (lightwalletd protocol; its `tor` feature brings arti, the Rust Tor client:
+the `cargo tree` crate count went from 336 to 719), `zcash_primitives` / `zcash_transparent` /
 `zcash_address` (transactions, ids, addresses), `tonic` with webpki roots (gRPC over TLS), `tokio`, `clap`,
 `serde_json`, `anyhow`, `rpassword`, `libc`. `Cargo.lock` is committed. MIT, see `LICENSE`.
 
 Track: CORE & TOOLING. This is plumbing for wallet and SDK authors: a small library (`zcrowd-core`) and an indexer-fed
-tool that answer one question that wallets currently cannot. Roadmap: built-in Tor for `sync`, a wallet-side hook that
-warns on the send screen, pool-aware scoring.
+tool that answer one question that wallets currently cannot. Roadmap: a wallet-side hook that warns on the send
+screen, pool-aware scoring.
 
 ## NOT VERIFIED
 
-Tor and `torsocks` with `sync`; macOS and Windows; Firefox and Safari for the web demo; release-build performance; the
+`sync` over Tor on macOS and Windows, on networks that block Tor, for a 30-day range, and from servers other than
+`zec.rocks`; the cause of one hang in an early Tor sync (seen once, not reproduced in more than
+20 later runs; the 60 s idle limit on the block stream was added after it and is not verified to cure it); macOS and
+Windows; Firefox and Safari for the web demo; release-build performance; the
 coinbase-to-shielded and cross-pool decode paths on real transactions; P2SH input-address detection beyond the sources
-seen in the sample; independence of the public servers; the time of a completely cold 30-day sync; packet-level network behaviour of `sync` (sampled once with `ss`:
-only the chosen server and the DNS resolver were seen).
+seen in the sample; independence of the public servers; the time of a completely cold 30-day sync; packet-level network
+behaviour of `sync` (the leak-check interposer sees libc calls, not raw system calls; a direct sync was sampled once with
+`ss`: only the chosen server and the DNS resolver were seen).

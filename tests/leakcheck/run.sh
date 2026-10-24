@@ -6,6 +6,9 @@
 #     no port-53 traffic. Only counts are printed, never the raw log.
 #  3. Its output must be byte-identical to the direct sync of the same range, and the Tor directory must hold only
 #     arti's own files with no mention of the server.
+# The range is one day (the shortest `sync` accepts). Fetching its ~2000 transactions over Tor takes ~10 minutes, so the
+# Tor leg starts with the direct leg's transaction cache minus 20 files: it still asks for the tip, all the blocks and
+# 20 transactions, every kind of request, but the byte-identity in step 3 then proves the transactions only for those 20.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 bin=$(realpath "${1:-$here/../../target/debug/zcrowd}")
@@ -17,11 +20,11 @@ cc -shared -fPIC -O1 -o "$work/leakcheck.so" "$here/leakcheck.c" -ldl
 getent ahosts $hosts | awk '{print $1}' | sort -u >"$work/ips"
 [ -s "$work/ips" ] || { echo "cannot resolve $hosts, so there are no server IPs to check against"; exit 2; }
 
-sync() { # sync <name> <zcrowd sync flags...>: a full (all request kinds) sync of a tiny range, under the shim
+sync() { # sync <name> <zcrowd sync flags...>: a one-day range, under the shim
   local name=$1
   shift
   LD_PRELOAD="$work/leakcheck.so" LEAKCHECK_LOG="$work/$name.log" "$bin" sync --server https://zec.rocks:443 \
-    --days 0 --out "$work/$name/flows.ndjson" "$@" >"$work/$name.out" 2>&1
+    --days 1 --out "$work/$name/flows.ndjson" "$@" >"$work/$name.out" 2>&1
 }
 calls='^(connect|sendto|sendmsg|sendmmsg)$'
 lookups() { awk '$1 ~ /^(getaddrinfo|gethostbyname)$/' "$work/$1.log" | wc -l; }
@@ -37,16 +40,22 @@ if [ "$d_look" -lt 1 ] || [ "$d_ip" -lt 1 ]; then echo "LEAKCHECK BROKEN: the sh
 
 end=$(sed -n 's/^blocks=.* range=[0-9]*\.\.\([0-9]*\) .*/\1/p' "$work/direct.out")
 [ -n "$end" ] || { echo "no range line in the direct sync output"; exit 2; }
+cached=("$work"/direct/tx/*)
+[ "${#cached[@]}" -gt 20 ] || { echo "the direct sync cached ${#cached[@]} transactions, too few to leave 20 to fetch over Tor"; exit 2; }
+mkdir -p "$work/tor/tx"
+printf '%s\0' "${cached[@]:20}" | xargs -0 cp -t "$work/tor/tx"
 sync tor --tor-dir "$work/tordir" --end-height "$end" || { echo "Tor sync failed:"; tail -5 "$work/tor.out"; exit 1; }
+fetched=$(sed -n 's/^events=.* fetched_txs=\([0-9]*\) .*/\1/p' "$work/tor.out")
+[ "${fetched:-0}" -ge 1 ] || { echo "the Tor sync fetched no transaction, so it did not use every kind of request"; exit 2; }
 t_all=$(lookups tor) t_look=$(server_lookups tor) t_ip=$(server_ips tor) t_53=$(port53 tor)
-echo "Tor sync: lookups (any name)=$t_all, lookups of the server name=$t_look, connects to server IPs=$t_ip, port-53 sends=$t_53, distinct connect destinations (Tor relays)=$(dests tor)"
+echo "Tor sync (tip, blocks and $fetched transactions fetched; the rest from the cache): lookups (any name)=$t_all, lookups of the server name=$t_look, connects to server IPs=$t_ip, port-53 sends=$t_53, distinct connect destinations (Tor relays)=$(dests tor)"
 if [ "$t_look" -ne 0 ] || [ "$t_ip" -ne 0 ] || [ "$t_53" -ne 0 ]; then echo "LEAKCHECK FAILED"; exit 1; fi
 
 # Same range, same bytes: Tor changes the route, not the data.
 for f in flows.ndjson flows.meta.json; do
   cmp -s "$work/direct/$f" "$work/tor/$f" || { echo "OUTPUT DIFFERS from the direct sync: $f"; exit 1; }
 done
-echo "output through Tor is byte-identical to the direct sync ($(wc -l <"$work/tor/flows.ndjson") events)"
+echo "output through Tor is byte-identical to the direct sync ($(wc -l <"$work/tor/flows.ndjson") events; the blocks and $fetched transactions came through Tor)"
 
 # The Tor state directory holds arti's directory data, guard state and locks, and no trace of the server.
 odd=$(cd "$work/tordir" && find . -type f | grep -Ev '^\./arti-cache/(dir\.sqlite3(-wal|-shm)?|dir\.lock|dir_blobs/[^/]+)$|^\./arti-data/state/(guards\.json|circuit_timeouts\.json|state\.lock)$' || true)

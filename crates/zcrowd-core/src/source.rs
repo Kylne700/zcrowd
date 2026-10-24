@@ -1,9 +1,11 @@
 //! Where chain data comes from: a lightwalletd server (TLS verified) or committed fixtures.
 use anyhow::{Context, Result, anyhow, bail};
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tonic::transport::{Channel, ClientTlsConfig, Uri};
+use zcash_client_backend::proto::compact_formats::CompactBlock;
 use zcash_client_backend::proto::service::{
     BlockId, BlockRange, ChainSpec, Empty, PoolType, TxFilter, compact_tx_streamer_client::CompactTxStreamerClient,
 };
@@ -83,7 +85,83 @@ pub struct Lwd {
     pub tor: bool,
 }
 
+/// A block stream that goes quiet this long counts as failed (tonic's request timeout ends at the response headers).
 const STREAM_IDLE: Duration = Duration::from_secs(60);
+const STREAM_BACKOFF: Duration = Duration::from_millis(500);
+/// A block stream that fails is opened again after the last block received: this many failed attempts in a row (an
+/// attempt that delivered a block starts the count again) or this many in all end the read. The in-all cap keeps a
+/// server that sends one block per attempt from holding the sync for ever.
+const STREAM_FAILS_IN_A_ROW: u32 = 5;
+const STREAM_FAILS_IN_ALL: u32 = 20;
+
+/// Blocks `start..=end` through `open(from)`, which starts a stream at height `from`. A stream that fails (an error or
+/// `idle` without data) is opened again at the block after the last one received, after `backoff` that doubles with each
+/// failure in a row, so a lost connection in the middle of a range costs the blocks not yet received and nothing more.
+/// No block is dropped or repeated by this, and the caller still checks the heights and the hash chain over the whole
+/// list, seams included. A stream that ends cleanly is not reopened: the caller judges a short answer.
+pub async fn read_blocks<St, Fut>(
+    start: u64,
+    end: u64,
+    idle: Duration,
+    backoff: Duration,
+    mut open: impl FnMut(u64) -> Fut,
+) -> Result<Vec<BlockSummary>>
+where
+    Fut: Future<Output = Result<St, tonic::Status>>,
+    St: Stream<Item = Result<BlockSummary, tonic::Status>> + Unpin,
+{
+    let mut out: Vec<BlockSummary> = vec![];
+    let (mut in_a_row, mut in_all) = (0u32, 0u32);
+    loop {
+        let from = out.last().map_or(start, |b| b.h + 1);
+        if from > end {
+            return Ok(out);
+        }
+        let before = out.len();
+        let failure = match open(from).await {
+            Err(e) => e.to_string(),
+            Ok(mut st) => loop {
+                match tokio::time::timeout(idle, st.next()).await {
+                    Ok(Some(Ok(b))) => out.push(b),
+                    Ok(Some(Err(e))) => break e.to_string(),
+                    Ok(None) => return Ok(out),
+                    Err(_) => break format!("no data for {} s", idle.as_secs()),
+                }
+            },
+        };
+        in_a_row = if out.len() > before { 1 } else { in_a_row + 1 };
+        in_all += 1;
+        if in_a_row >= STREAM_FAILS_IN_A_ROW || in_all >= STREAM_FAILS_IN_ALL {
+            bail!("get_block_range: {failure} (gave up at block {from} of {start}..{end} after {in_all} failed attempts)");
+        }
+        tokio::time::sleep(backoff * 2u32.pow(in_a_row - 1)).await;
+    }
+}
+
+/// One compact block, reduced to what zcrowd needs.
+fn summarize(b: &CompactBlock) -> BlockSummary {
+    let txs = b
+        .vtx
+        .iter()
+        .map(|t| {
+            let mut id = t.txid.clone();
+            id.reverse();
+            let pools = [!(t.spends.is_empty() && t.outputs.is_empty()), !t.actions.is_empty(), !t.ironwood_actions.is_empty()];
+            TxSummary {
+                txid: hex::encode(id),
+                n_vin: t.vin.len(),
+                n_vout: t.vout.len(),
+                shielded: pools.contains(&true),
+                multi_pool: pools.iter().filter(|&&p| p).count() > 1,
+                pools,
+                // The compact `vin` leaves the coinbase input out; the coinbase is the block's first
+                // transaction (zcash_client_backend 0.25 proto/compact_formats.rs, `CompactTx.vin`).
+                coinbase: t.index == 0,
+            }
+        })
+        .collect();
+    BlockSummary { h: b.height, t: b.time as u64, txs, hash: hex::encode(&b.hash), prev_hash: hex::encode(&b.prev_hash) }
+}
 
 /// Longer than a cold bootstrap needs (about 30 s); a hang is not a loud failure. ZCROWD_TOR_BOOTSTRAP_SECS overrides it.
 fn tor_bootstrap_timeout() -> Duration {
@@ -196,49 +274,17 @@ impl BlockSource for Lwd {
     }
 
     async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
-        let range = BlockRange {
-            start: Some(BlockId { height: start, hash: vec![] }),
-            end: Some(BlockId { height: end, hash: vec![] }),
-            // Every pool: an Ironwood-only transaction is invisible otherwise.
-            pool_types: [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard, PoolType::Ironwood].map(|p| p as i32).to_vec(),
-        };
-        let mut stream = retry("get_block_range", || {
+        read_blocks(start, end, STREAM_IDLE, STREAM_BACKOFF, |from| {
             let mut c = self.client.clone();
-            let r = range.clone();
-            async move { c.get_block_range(r).await }
+            let range = BlockRange {
+                start: Some(BlockId { height: from, hash: vec![] }),
+                end: Some(BlockId { height: end, hash: vec![] }),
+                // Every pool: an Ironwood-only transaction is invisible otherwise.
+                pool_types: [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard, PoolType::Ironwood].map(|p| p as i32).to_vec(),
+            };
+            async move { Ok::<_, tonic::Status>(c.get_block_range(range).await?.into_inner().map(|b| b.map(|b| summarize(&b)))) }
         })
-        .await?
-        .into_inner();
-        let mut out = vec![];
-        // tonic's request timeout ends at the response headers: a server that goes quiet mid-stream must fail, not hang.
-        while let Some(b) = tokio::time::timeout(STREAM_IDLE, stream.message())
-            .await
-            .map_err(|_| anyhow!("block stream: no data for {} s", STREAM_IDLE.as_secs()))?
-            .context("block stream")?
-        {
-            let txs = b
-                .vtx
-                .iter()
-                .map(|t| {
-                    let mut id = t.txid.clone();
-                    id.reverse();
-                    let pools = [!(t.spends.is_empty() && t.outputs.is_empty()), !t.actions.is_empty(), !t.ironwood_actions.is_empty()];
-                    TxSummary {
-                        txid: hex::encode(id),
-                        n_vin: t.vin.len(),
-                        n_vout: t.vout.len(),
-                        shielded: pools.contains(&true),
-                        multi_pool: pools.iter().filter(|&&p| p).count() > 1,
-                        pools,
-                        // The compact `vin` leaves the coinbase input out; the coinbase is the block's first
-                        // transaction (zcash_client_backend 0.25 proto/compact_formats.rs, `CompactTx.vin`).
-                        coinbase: t.index == 0,
-                    }
-                })
-                .collect();
-            out.push(BlockSummary { h: b.height, t: b.time as u64, txs, hash: hex::encode(&b.hash), prev_hash: hex::encode(&b.prev_hash) });
-        }
-        Ok(out)
+        .await
     }
 
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {

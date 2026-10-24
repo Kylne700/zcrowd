@@ -1,7 +1,10 @@
 use anyhow::{Result, anyhow};
+use futures::StreamExt;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::Duration;
 use zcrowd_core::ingest::{RawCache, all_pools_from, candidates, resolve};
-use zcrowd_core::source::{BlockSource, BlockSummary, Fixtures, Recording, TxSummary};
+use zcrowd_core::source::{BlockSource, BlockSummary, Fixtures, Recording, TxSummary, read_blocks};
 
 fn fixtures() -> Fixtures {
     Fixtures::open(&PathBuf::from(format!("{}/../../fixtures", env!("CARGO_MANIFEST_DIR")))).unwrap()
@@ -195,6 +198,126 @@ async fn block_chain_is_checked_across_request_chunks() {
     let mut c = chain(start, n);
     c.0[2_000].prev_hash = format!("{:064x}", 9);
     assert!(crawl_err(&c, start, end).await.contains("block 12000 does not follow block 11999"));
+}
+
+/// A server whose block stream breaks. `blocks` reads through `read_blocks`; the n-th stream it opens (from 0) sends
+/// `cut(n)` blocks and then fails like a lost connection (`None`: it runs to the end). `opened` lists the start heights.
+struct Flaky {
+    chain: Chain,
+    cut: Box<dyn Fn(usize) -> Option<usize> + Sync>,
+    opened: Mutex<Vec<u64>>,
+}
+
+fn flaky(chain: Chain, cut: impl Fn(usize) -> Option<usize> + Sync + 'static) -> Flaky {
+    Flaky { chain, cut: Box::new(cut), opened: Mutex::new(vec![]) }
+}
+
+impl BlockSource for Flaky {
+    async fn tip(&self) -> Result<u64> {
+        self.chain.tip().await
+    }
+    async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
+        read_blocks(start, end, Duration::from_secs(5), Duration::from_millis(1), |from| {
+            let n = {
+                let mut v = self.opened.lock().unwrap();
+                v.push(from);
+                v.len() - 1
+            };
+            let mut items: Vec<Result<BlockSummary, tonic::Status>> =
+                self.chain.0.iter().filter(|b| (from..=end).contains(&b.h)).cloned().map(Ok).collect();
+            if let Some(k) = (self.cut)(n) {
+                items.truncate(k);
+                items.push(Err(tonic::Status::unavailable("h2 protocol error: error reading a body from connection")));
+            }
+            async move { Ok::<_, tonic::Status>(futures::stream::iter(items)) }
+        })
+        .await
+    }
+    async fn raw_tx(&self, _: &str) -> Result<(Vec<u8>, u64)> {
+        Err(anyhow!("no transactions here"))
+    }
+    fn strict_chain(&self) -> bool {
+        true
+    }
+}
+
+// A lost connection in the middle of a range costs the blocks not yet received, not the sync: the stream is opened again
+// after the last block received, with no gap and no repeat, and the hash chain is still checked over the whole range.
+#[tokio::test]
+async fn a_block_stream_that_breaks_mid_range_is_resumed_after_the_last_block_received() {
+    let (start, n) = (1_000, 300);
+    let end = start + n - 1;
+    // the first stream dies after 120 blocks, the second after 50, the third runs to the end
+    let src = flaky(chain(start, n), |i| [Some(120), Some(50), None].get(i).copied().flatten());
+    let got = src.blocks(start, end).await.unwrap();
+    assert_eq!(got.iter().map(|b| b.h).collect::<Vec<_>>(), (start..=end).collect::<Vec<_>>(), "no gap and no repeat");
+    assert_eq!(*src.opened.lock().unwrap(), [1_000, 1_120, 1_170], "each stream starts after the last block received");
+    let src = flaky(chain(start, n), |i| [Some(120), Some(50), None].get(i).copied().flatten());
+    let (_, st) = candidates(&src, start, end).await.unwrap();
+    assert_eq!(st.blocks as u64, n);
+    // the stream fails after the very last block: everything is there, so nothing is opened again
+    let src = flaky(chain(start, n), move |_| Some(n as usize));
+    assert_eq!(src.blocks(start, end).await.unwrap().len() as u64, n);
+    assert_eq!(*src.opened.lock().unwrap(), [1_000]);
+    // a stream that dies on the open and before any block: the first block still comes from `start`
+    let src = flaky(chain(start, n), |i| (i < 2).then_some(0));
+    assert_eq!(src.blocks(start, end).await.unwrap().len() as u64, n);
+    assert_eq!(*src.opened.lock().unwrap(), [1_000, 1_000, 1_000]);
+}
+
+#[tokio::test]
+async fn a_resumed_stream_that_does_not_follow_the_last_block_is_refused() {
+    let (start, n) = (1_000, 300);
+    let mut c = chain(start, n);
+    c.0[120].prev_hash = format!("{:064x}", 7); // the block the second stream starts with
+    let src = flaky(c, |i| (i == 0).then_some(120));
+    let e = format!("{:#}", candidates(&src, start, start + n - 1).await.unwrap_err());
+    assert!(e.contains("block 1120 does not follow block 1119"), "{e}");
+}
+
+#[tokio::test]
+async fn resuming_is_bounded_in_attempts_in_a_row_and_in_all() {
+    let (start, n) = (1_000, 300);
+    let end = start + n - 1;
+    // fails before sending anything: 5 attempts, then the error says why
+    let src = flaky(chain(start, n), |_| Some(0));
+    let e = format!("{:#}", src.blocks(start, end).await.unwrap_err());
+    assert!(e.contains("h2 protocol error") && e.contains("gave up at block 1000") && e.contains("after 5 failed attempts"), "{e}");
+    assert_eq!(src.opened.lock().unwrap().len(), 5);
+    // one block per stream, for ever: every attempt makes progress, so only the total stops it
+    let src = flaky(chain(start, n), |_| Some(1));
+    let e = format!("{:#}", src.blocks(start, end).await.unwrap_err());
+    assert!(e.contains("gave up at block 1019") && e.contains("after 20 failed attempts"), "{e}");
+    assert_eq!(src.opened.lock().unwrap().len(), 20);
+    // a block received starts the count in a row again: four empty failures, one block, three more, then it runs
+    let src = flaky(chain(start, n), |i| match i {
+        0..=3 | 5..=7 => Some(0),
+        4 => Some(1),
+        _ => None,
+    });
+    assert_eq!(src.blocks(start, end).await.unwrap().len() as u64, n);
+}
+
+// A stream that goes quiet counts as failed, and is resumed like one that errors.
+#[tokio::test]
+async fn a_block_stream_that_goes_quiet_is_resumed() {
+    let (start, n) = (1_000, 50);
+    let c = chain(start, n);
+    let opens = Mutex::new(vec![]);
+    let got = read_blocks(start, start + n - 1, Duration::from_millis(30), Duration::from_millis(1), |from| {
+        opens.lock().unwrap().push(from);
+        let first = opens.lock().unwrap().len() == 1;
+        let items: Vec<Result<BlockSummary, tonic::Status>> =
+            c.0.iter().filter(|b| b.h >= from).take(if first { 10 } else { usize::MAX }).cloned().map(Ok).collect();
+        let s = futures::stream::iter(items);
+        let s: futures::stream::BoxStream<'static, Result<BlockSummary, tonic::Status>> =
+            if first { s.chain(futures::stream::pending()).boxed() } else { s.boxed() };
+        async move { Ok::<_, tonic::Status>(s) }
+    })
+    .await
+    .unwrap();
+    assert_eq!(got.iter().map(|b| b.h).collect::<Vec<_>>(), (start..start + n).collect::<Vec<_>>());
+    assert_eq!(*opens.lock().unwrap(), [1_000, 1_010]);
 }
 
 // What the compact block says decides which transactions are fetched in full.

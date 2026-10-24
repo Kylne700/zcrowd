@@ -223,7 +223,10 @@ Decisions worth a reviewer's eye:
   zcash_primitives-0.31.0 `src/transaction/builder.rs:407-411` switches off only the coinbase builder). ZIP 2005
   (status Proposed) says wallets SHOULD move funds to Ironwood. The sample's 0 shields into Orchard in 30 days fits
   that, but the reason is an inference; the consensus code of zebrad and zcashd was not read. `check --pool orchard`
-  needs no special message and has none.
+  needs no special message and has none. SUPERSEDED in the S9d stage: ZIP 258 (Status: Final, read 2026-10-24) has the
+  rule ("No new value may enter the Orchard pool": from NU6.3 activation on, for every transaction of every version, the
+  encoded `valueBalanceOrchard` is nonnegative; value may still leave Orchard). So `--shield --pool orchard` is refused and
+  an unshield out of Orchard gets a message when Orchard has no entry (S9d section, F5 and F6).
 - The pool check is a shortcut with two limits. It fires only when more than 1000 blocks hold data in some pool, so a
   range of about a day or less is not protected (the 1-day live run had 150 Sapling, 64 Orchard and 783 Ironwood
   blocks: at most 997 with any, which is below it). And Orchard activity is falling, so in the future even a long range
@@ -415,6 +418,84 @@ this stage), so every sample number below is a count on the unchanged sample.
   whole workflow. NOT VERIFIED: no CI run exists (the lead pushes to the private origin later); `actionlint` is not installed,
   the file was parsed with PyYAML only (jobs: test, sandbox, e2e, browsers, deny).
 
+The code findings of the second independent review (research/46, G2), each with a test that failed on the code before its fix
+(the page gets the same logic in `web/index.template.html`, `web/index.html` is rebuilt, and `web/test/parity.mjs` compares
+it with the Rust output wherever the case is reachable):
+
+- **F5, `--shield` weighed Orchard (becca33).** ZIP 258 (Final): from NU6.3 on no new value may enter Orchard, so Orchard had
+  k=0 for every shield amount and the default `--pool any` (the worst of three pools) turned every `--shield` answer RED.
+  In shield mode `any` is now the worse of Sapling and Ironwood (`score_pools`, `pools_for`): header `pool any (worst of
+  sapling, ironwood)`, crowd line `... , the worst of the two`, two entries in the JSON `pools`; `--shield --pool orchard`
+  is refused (`--shield cannot go into Orchard: from NU6.3 on no value may enter that pool (ZIP 258). Use --pool sapling or
+  --pool ironwood, or leave --pool out`, exit 1; the page refuses it too: `A shield cannot go into Orchard: ... Choose
+  Sapling, Ironwood or Not sure.`). Unshield mode is unchanged. Sample: `--shield` 0.01, 0.1 and 5 give AMBER (RED before).
+  Tests: `shield_mode_weighs_only_the_pools_a_shield_can_go_into` (cli; failed before), core `shield_mode_counts_entries_into_the_chosen_pool_only_and_never_scores_orchard`,
+  parity (the refusal on both sides, the two-pool `pools` of a synthetic sample).
+- **F1, the line "shields after ... are not counted" was missing under `any` (081e188).** It was printed when the overall
+  (worst) verdict was NO MATCH or RED; but GREEN outranks NO MATCH, so with one pool GREEN and another NO MATCH or RED the
+  caveat of the pool that rests on a missing entry never showed. Now it is printed when any pool shown rests on it, except
+  Orchard (later blocks cannot add to it). Test `under_any_the_missing_shields_line_follows_every_pool_shown_except_orchard`
+  (failed before); page: `restsOnMissing`, compared on every parity comparison, text asserted in `headless.mjs`.
+- **F2, suggestions under `any` were scored in one pool (7193227).** `check --unshield 1.23456789` offered `1.25000000 ZEC ->
+  crowd 723 (weighted 539.5, GREEN)` while checking 1.25 gave crowd 96 (weighted 70.0): the suggestion was weighed in Ironwood
+  (the pool that was worst for the typed amount), the answer for 1.25 comes from Sapling (the worst pool for that amount). `suggest::popular` now takes the pools the check weighs and judges
+  each candidate by their worst, as `check` does (an amount-reach pre-filter keeps `check` of the sample at 0.63 s in the debug build, measured once on a busy machine). Now
+  the first suggestions are `1.24985000 ZEC -> crowd 182 (weighted 131.5, GREEN)`, `1.24980000 -> 172 (124.5)`, `1.24975000 -> 167
+  (121.5)`, `1.24995000 -> 108 (78.0)`, `1.25000000 -> 96 (70.0)`. Tests: `under_any_a_suggestion_is_scored_the_way_the_check_scores_that_amount`
+  (cli; every suggestion equals the check of that amount; failed before), `a_suggestion_is_judged_by_the_worst_of_the_pools_the_check_weighs`
+  (suggest.rs), parity (`sample: unshield 1.23456789 {"pool":"any"}` failed before; a loop compares every suggestion with the check of its
+  own amount), headless (the first suggestion of the demo amount failed before).
+- **F6, an Orchard holder got NO MATCH and no hint why (0e7ae89).** Nothing can enter Orchard since NU6.3, so a note spent out
+  of Orchard now was shielded before any window: when the data holds no Orchard entry (a High-confidence shield or move, any
+  amount, inside the lookback) `check --unshield` with `--pool any` or `--pool orchard` adds a `note:` line after the verdict
+  (and in the JSON `notes`) that says so and says how to reach further back (`sync --days N`, `--lookback-days N`); the
+  report adds a sentence under its table (`N of the NO MATCH unshields left Orchard. ...`); the page has the note in its own
+  words. A note, not a verdict: the verdict stays NO MATCH (the same arithmetic, honestly labelled). `shortcut:` it is not keyed
+  on height, so data from before NU6.3 without an Orchard entry gets the line too. Tests: `an_empty_orchard_crowd_says_why_and_how_to_reach_further_back`
+  and `report_counts_the_no_match_unshields_out_of_an_orchard_nothing_can_enter` (both failed before), core
+  `has_entries_looks_at_the_window_the_kind_and_the_confidence_not_the_amount`, parity (`orchardEmpty`, compared with the CLI
+  note on every comparison, plus a second synthetic file whose only Orchard entry is 20 days old: note at a lookback of 19 days,
+  none at 20), headless (the note texts).
+- **F7, the cli tests failed at random on a busy machine (a2cea35).** `run_env` wrote the child's stdin with `unwrap()`; a
+  child that refuses its arguments exits before it reads, and the write fails with a broken pipe. `feed()` now accepts that one
+  error kind and fails on any other. Test `input_for_a_child_that_already_refused_its_arguments_is_not_a_test_failure` (failed
+  before with `Os { code: 32, kind: BrokenPipe ... }`); `cargo test` ran twice in the final run below.
+- **F8 one-liners.** (a) The `LIVE=1` sync of `tests/e2e.sh` has its own `--tor-dir "$T/tor"` and no longer shares the default
+  arti state directory (the commit message d2bd850 says "like the sandboxed runs": wrong, no other e2e run uses `--tor-dir`;
+  `bash -n` only, `LIVE=1` was not run: NOT VERIFIED). (d) A damaged line in an events file was reported with serde's position
+  inside the line (`at line 1 column 17`); `read_ndjson` now names the line of the file (`line 4, column 17: EOF while parsing a
+  value`); test `a_damaged_event_line_is_reported_with_its_line_number_in_the_file` (failed before). The other five: (b) clap echoes
+  an argv value in its errors, (c) the bad-certificate checks by hand, (e) `verify -` prints the txid it read, (f) the seccomp list has no
+  ptrace/`process_vm_writev`/`pidfd_getfd`, (i) the README examples: documentation or a known residue, in the handoff
+  `S9d-docs.md`, no code change. (g) `input_address` still guesses a p2sh address for a non-coinbase bare-multisig spend
+  (decode.rs, S9c's file; 0 cases in the sample): not changed. **(h) NOT DONE:** no note when a Low-confidence entry falls in
+  the amount window (research/46 says "fix if wanted"; all 140 Low events of the sample are unshields, so no entry is lost there;
+  it would need a note in the text, the JSON, the report and the page, each with a parity case).
+- **The P3 flake of the audit (9048c4d; the commit message labels it "F8 / G2 flake": it is item 6 of the S9d brief, not F8).** The pre-scan
+  for the random typed values read the ignored `data/` directory (1.6 GB), where a random 9-digit value occurs by chance in
+  about 2% of runs (`FAIL P3 the random test values were already in the tree (run again)`). The scan now asks `git grep
+  --no-index --exclude-standard` (what git shows of the working tree: tracked and untracked files that are not ignored; the
+  post-scan too, and the `find -newer` check still catches any file written anywhere but `target/` and `.git`). A self-check
+  in the audit builds a toy directory with `.gitignore`, plants the values in an ignored file (must not be found) and in a plain
+  file (must be found). Repro: a file `data/.s9d-p3-plant-<pid>` holding the typed values was found by the old expression (the
+  audit would have died) and not by the new one; with `--exclude-standard` removed the self-check fails with `FAIL  P3 the
+  repository scan reads ignored files ...`. What is left: a chance of about 2e-4 that a value occurs in a tracked file (still
+  "run again").
+- **S4-1 (re-run table "partly").** The 6 h slack of the page's short-window warning was already gone (af400f9); now the
+  condition is one pure function `shortWindow(p)` and `parity.mjs` compares it with the CLI's `short_window` on every
+  comparison (a synthetic sample that covers 29 days 23 h is short for a lookback of 30 days, not of 29). With the old
+  slack put back parity fails: `orchard-old: short-window warning, unshield 1.0 {"pool":"any"}`.
+- **S4-9 (sandbox allowed AF_UNIX): fixed by the merged seccomp filter** (every socket family, socketpair, io_uring, other ABIs). Left:
+  the filter does not name `ptrace`, `process_vm_writev` or `pidfd_getfd`, and an inherited descriptor stays usable. Theoretical:
+  `check`, `report` and `verify` inherit only stdio from the shell, and Yama `ptrace_scope` 1 (the Ubuntu default) limits
+  tracing to descendants. Not changed, said in the docs.
+- **Docs.** README.md and docs/ belong to the next stage (S11); every change of an output line and every claim with its
+  check is in `scratch/zecathon/handoff/S9d-docs.md` (F3 and F4: the amount IS printed in the match lines and in `--json`;
+  S3-5: shield sources are not authenticated by the txid), as the brief says.
+
+The sample and the number in the examples above are those of the unchanged sample; the stale coinbase `src` lines of the sample
+(1,466) are still in it, `verify` on them shows DIFF until the data refresh (S9e).
+
 ## Deviations from the first design (and why)
 
 1. `--unshield 1.23456789` prints NO MATCH plus the odd-amount note, not RED (the first design said RED; the privacy spec made odd amounts a
@@ -482,6 +563,12 @@ added the project's own private GitHub remote `origin`. The agents never push, a
 23. Limit added (README section 8, docs/PRIVACY.md): the block hash chain is checked inside one `sync` run. When a later
     run extends older data, the link between the two runs is not checked (block hashes are not stored), so a different
     server on a later run is not noticed.
+24. The pool semantics of the spec (A11) were changed by the S9d stage, on the strength of ZIP 258 (Final: from NU6.3 on no new
+    value may enter Orchard): in shield mode `--pool any` is the worst of Sapling and Ironwood, not of three pools (two `pool`
+    lines, JSON `pools` of length 2) and `--shield --pool orchard` is refused; under `any` the "shields after ... are not counted"
+    line follows every pool shown that rests on a missing entry, except Orchard; a suggestion is judged by the worst of the pools
+    the check weighs; an empty Orchard crowd gets a note (text, JSON, report, page). Everything else of A11 (the events, the crowd, the
+    order RED > AMBER > GREEN > NO MATCH, the A10 lines `verdict:` and `crowd:`) is as before.
 
 ## NOT VERIFIED
 
@@ -494,7 +581,9 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   pools: since the review-fix stage `sync` refuses a range in which, from NU6.3 on, more than 1000 blocks hold data in some
   pool and none holds data in another. A range of about a day or less is below that and not protected, and a server
   that leaves a pool out for only part of the range is not noticed.
-- The consensus side of the Orchard finding above (zebrad and zcashd were not read). The oldest Rust that builds it
+- The consensus side of the Orchard finding above is taken from the text of ZIP 258 (Final), not from node code: zebrad and
+  zcashd were not read, and the sample holds no entry into Orchard to test the rule against (its 443 Orchard events are
+  all unshields). The oldest Rust that builds it
   is 1.90 (`rust-version`; `cargo +1.90.0 check --workspace --all-targets --locked` passes, S9c); the tests ran with 1.97.1 only. Whether
   the empty network namespace works on a default Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`): the
   seccomp layer does not need it, and the `sandbox` CI job runs without the sysctl switch to show both (no CI run has
@@ -507,6 +596,9 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   Peers seen: the chosen server on 443 and the DNS resolver on UDP 53. Sampling can miss short-lived sockets. (A first
   attempt filtered by process name also matched the parallel Tor agent's `zcrowd` process: always filter by pid.)
 - `strace` is not installed here, so no `connect()` list from the kernel.
+- S9d: the `LIVE=1` one-day sync of `tests/e2e.sh` after the `--tor-dir` change (`bash -n` only); the GitHub CI runs of the
+  `sandbox` job and of the macOS step (no run exists; the YAML was parsed with PyYAML only); a bad certificate over Tor for
+  `expired.badssl.com` (timed out twice in the review; the two other cases were checked by hand on 2026-10-24).
 
 ## Open problems and hand-over
 

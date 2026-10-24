@@ -7,6 +7,7 @@ mod verify;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use zcrowd_core::crowd::{DEFAULT_FEE_ALLOWANCE, MAX_LOOKBACK_DAYS, MAX_SLACK_ZAT};
 use zcrowd_core::source::{DEFAULT_SERVERS, Fixtures, Lwd, require_tls};
@@ -45,7 +46,8 @@ enum Cmd {
         #[arg(long, conflicts_with = "tor")]
         no_tor: bool,
         /// Where Tor keeps its state (public Tor directory data and guard state only; nothing about your
-        /// queries). Default: $XDG_CACHE_HOME/zcrowd/tor, else ~/.cache/zcrowd/tor.
+        /// queries). Default: %LOCALAPPDATA%\zcrowd\tor on Windows; elsewhere $XDG_CACHE_HOME/zcrowd/tor, else
+        /// ~/.cache/zcrowd/tor.
         #[arg(long, conflicts_with = "no_tor")]
         tor_dir: Option<PathBuf>,
         /// Last block to sync instead of the chain tip minus 10 (never later than that), for repeatable runs.
@@ -116,11 +118,30 @@ pub enum Src {
     Fix(Fixtures),
 }
 
-/// $XDG_CACHE_HOME/zcrowd/tor, else ~/.cache/zcrowd/tor. Never a relative path: that could land inside a repo.
+/// Where Tor keeps its state without --tor-dir. Never a relative path: that could land inside a repo.
 fn default_tor_dir() -> Result<PathBuf> {
-    let abs = |k: &str| std::env::var_os(k).map(PathBuf::from).filter(|p| p.is_absolute());
-    let base = abs("XDG_CACHE_HOME").or_else(|| abs("HOME").map(|h| h.join(".cache")));
-    Ok(base.ok_or_else(|| anyhow!("no cache directory (XDG_CACHE_HOME and HOME are not set); pass --tor-dir"))?.join("zcrowd").join("tor"))
+    let var = std::env::var_os;
+    tor_dir_in(cfg!(windows), var("LOCALAPPDATA"), var("XDG_CACHE_HOME"), var("HOME"))
+}
+
+/// The rule of `default_tor_dir` with the environment passed in, so every system can test it:
+/// `%LOCALAPPDATA%\zcrowd\tor` on Windows, else `$XDG_CACHE_HOME/zcrowd/tor`, else `~/.cache/zcrowd/tor`.
+fn tor_dir_in(
+    windows: bool,
+    local_app_data: Option<OsString>,
+    xdg_cache_home: Option<OsString>,
+    home: Option<OsString>,
+) -> Result<PathBuf> {
+    let abs = |v: Option<OsString>| v.map(PathBuf::from).filter(|p| p.is_absolute());
+    let (base, names) = if windows {
+        (abs(local_app_data), "LOCALAPPDATA")
+    } else {
+        (abs(xdg_cache_home).or_else(|| abs(home).map(|h| h.join(".cache"))), "XDG_CACHE_HOME and HOME")
+    };
+    Ok(base
+        .ok_or_else(|| anyhow!("no cache directory ({names} not set, or not an absolute path); pass --tor-dir"))?
+        .join("zcrowd")
+        .join("tor"))
 }
 
 /// Tor is the default: only `--no-tor` connects directly.
@@ -177,5 +198,34 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tor_dir_follows_the_system_and_is_never_a_relative_path() {
+        // Built from temp_dir(): whether a path is absolute depends on the system the test runs on.
+        let t = std::env::temp_dir();
+        let p = |name: &str| Some(t.join(name).into_os_string());
+        let rel = || Some(OsString::from("relative"));
+        let tor = |base: PathBuf| base.join("zcrowd").join("tor");
+        let err = |r: Result<PathBuf>| r.unwrap_err().to_string();
+
+        // Windows: %LOCALAPPDATA%\zcrowd\tor, whatever the Unix variables say.
+        assert_eq!(tor_dir_in(true, p("local"), p("xdg"), p("home")).unwrap(), tor(t.join("local")));
+        // No fallback to HOME there, and a relative value is refused.
+        assert!(err(tor_dir_in(true, None, p("xdg"), p("home"))).contains("LOCALAPPDATA"));
+        assert!(err(tor_dir_in(true, rel(), p("xdg"), p("home"))).contains("LOCALAPPDATA"));
+
+        // Elsewhere: $XDG_CACHE_HOME/zcrowd/tor, else ~/.cache/zcrowd/tor; LOCALAPPDATA is ignored.
+        assert_eq!(tor_dir_in(false, p("local"), p("xdg"), p("home")).unwrap(), tor(t.join("xdg")));
+        assert_eq!(tor_dir_in(false, p("local"), None, p("home")).unwrap(), tor(t.join("home").join(".cache")));
+        assert_eq!(tor_dir_in(false, None, rel(), p("home")).unwrap(), tor(t.join("home").join(".cache")));
+        // Nothing absolute to start from: stop and ask for --tor-dir.
+        assert!(err(tor_dir_in(false, p("local"), None, None)).contains("--tor-dir"));
+        assert!(err(tor_dir_in(false, None, rel(), rel())).contains("XDG_CACHE_HOME and HOME"));
     }
 }

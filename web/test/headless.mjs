@@ -62,24 +62,46 @@ try {
       await amount.press("Enter");
       verdicts[typed] = { verdict: (await page.locator("#verdict").innerText()).trim(), note: (await page.locator("#note").innerText()).trim() };
     }
-    assert.equal(verdicts["1.0"].verdict, "NO MATCH");
+    // "Not sure" (the default) scores all three pools and shows the worst: 1.0 ZEC has no crowd in Sapling or Orchard
+    // but 162 entries into Ironwood
+    assert.equal(verdicts["1.0"].verdict, "GREEN");
     assert.equal(verdicts["1.0"].note, "");
-    assert.equal(verdicts["1.23456789"].verdict, "NO MATCH");
+    assert.equal(verdicts["1.23456789"].verdict, "AMBER");
     assert.match(verdicts["1.23456789"].note, /easy to recognise later/);
-    // a typed value that has a big crowd, and the four example buttons
+    // a typed value that has a big crowd in two pools: one line per pool, then each pool on its own
     await amount.fill("1.2497");
     await amount.press("Enter");
     assert.equal((await page.locator("#verdict").innerText()).trim(), "GREEN");
-    assert.match(await page.locator("#crowd").innerText(), /^157 earlier shields .* weighted 114\.5/);
+    assert.match(await page.locator("#crowd").innerText(), /^157 earlier shields and moves into sapling \(the worst of the three pools\) of about 1\.24970000 ZEC .* weighted 114\.5/);
+    assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=157 weighted=114.5 -> GREEN", "pool orchard: k=0 weighted=0.0 -> NO MATCH", "pool ironwood: k=592 weighted=437.0 -> GREEN"]);
+    assert.match(await page.locator("#pool-note").innerText(), /^592 entries of about this amount went into the other pools: linkable only through a visible pool move; not counted\./);
+    const poolPick = {};
+    for (const pool of ["ironwood", "orchard", "sapling"]) {
+      await page.locator("#pool").selectOption(pool);
+      poolPick[pool] = { verdict: (await page.locator("#verdict").innerText()).trim(), crowd: (await page.locator("#crowd").innerText()).trim(), lines: await page.locator("#pools li").count() };
+      assert.equal(poolPick[pool].lines, 0, "one pool chosen: no per-pool list");
+    }
+    assert.equal(poolPick.ironwood.verdict, "GREEN");
+    assert.match(poolPick.ironwood.crowd, /^592 earlier shields and moves into ironwood of about 1\.24970000 ZEC .* weighted 437\.0/);
+    assert.equal(poolPick.orchard.verdict, "NO MATCH");
+    assert.equal(poolPick.sapling.verdict, "GREEN");
+    assert.match(poolPick.sapling.crowd, /^157 earlier shields and moves into sapling of about /);
+    await page.locator("#pool").selectOption("any");
     const examples = {};
     for (const want of ["GREEN", "AMBER", "RED", "NO MATCH"]) {
       await page.locator(`button[data-ex="${want}"]`).click();
       examples[want] = [await amount.inputValue(), (await page.locator("#verdict").innerText()).trim()];
       assert.equal(examples[want][1], want, `example button ${want}`);
     }
+    // shield mode: the decoys are the other entries into the pool the funds arrive in. Orchard has none, so "Not sure" is
+    // RED; into Sapling 1.24985 ZEC has a crowd of 88
     await page.locator("#mode").selectOption("shield");
     await amount.fill("1.24985");
+    assert.equal((await page.locator("#verdict").innerText()).trim(), "RED");
+    await page.locator("#pool").selectOption("sapling");
     assert.equal((await page.locator("#verdict").innerText()).trim(), "GREEN");
+    assert.match(await page.locator("#crowd").innerText(), /^88 other shields and moves into sapling of about 1\.24985000 ZEC /);
+    await page.locator("#pool").selectOption("any");
     assert.equal(page.url(), url, "URL changed");
     assert.equal(routed.length, loaded.routed, `requests after load while typing: ${routed.slice(loaded.routed)}`);
     assert.equal(events.length, loaded.events, `request events after load: ${events.slice(loaded.events)}`);
@@ -113,7 +135,7 @@ try {
     assert.equal(routed.length, loaded.routed, `a request left the page: ${routed.slice(loaded.routed)}`);
     assert.deepEqual(problems.filter((p) => !/Content Security Policy|Refused to/i.test(p)), [], "page errors");
 
-    report.push({ origin: name, loadRequests: loaded.events, resources, requestsWhileTyping: typingEvents, afterInjectedAttempts: { requestEvents: events.slice(loaded.events), failed, reachedNetwork: routed.length - loaded.routed }, verdicts, examples, violations: violations.length, attempts, storage });
+    report.push({ origin: name, loadRequests: loaded.events, resources, requestsWhileTyping: typingEvents, afterInjectedAttempts: { requestEvents: events.slice(loaded.events), failed, reachedNetwork: routed.length - loaded.routed }, verdicts, poolPick, examples, violations: violations.length, attempts, storage });
     await ctx.close();
   }
 } finally {

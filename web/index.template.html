@@ -26,7 +26,7 @@
 </head>
 <body>
 <h1>zcrowd</h1>
-<p>Before you move Zcash between a transparent and a shielded address, see how many earlier transactions look like yours. Pick a direction, type an amount. Runs entirely in this page, on a frozen sample of public mainnet data.</p>
+<p>Before you move Zcash between a transparent and a shielded address, see how many earlier transactions look like yours. Pick a direction and a shielded pool, type an amount. Runs entirely in this page, on a frozen sample of public mainnet data.</p>
 
 <p class="box" id="cannot-send"><b>This page cannot send anything: its Content-Security-Policy blocks all network requests. Check DevTools &gt; Network.</b><br>
 <span class="small">Your amount is not stored and not put in the URL.</span></p>
@@ -35,6 +35,14 @@
 <select id="mode" autocomplete="off">
   <option value="unshield">unshield (shielded to transparent)</option>
   <option value="shield">shield (transparent to shielded)</option>
+</select>
+
+<label for="pool" id="pool-label">Pool your funds are in</label>
+<select id="pool" autocomplete="off">
+  <option value="any">Not sure (check all three, show the worst)</option>
+  <option value="ironwood">Ironwood</option>
+  <option value="orchard">Orchard</option>
+  <option value="sapling">Sapling</option>
 </select>
 
 <label for="amount" id="amount-label">Amount in ZEC</label>
@@ -62,8 +70,10 @@
     <p id="verdict"></p>
     <p id="why"></p>
     <p id="crowd"></p>
+    <ul id="pools"></ul>
+    <p id="pool-note" class="small"></p>
     <p id="note" class="small"></p>
-    <div id="matches-box"><h2>Matching shields (newest first, at most 10)</h2><ul id="matches"></ul></div>
+    <div id="matches-box"><h2>Matching entries into the pool (shields and moves, newest first, at most 10)</h2><ul id="matches"></ul></div>
     <div id="sugg-box"><h2>Popular nearby amounts (within 10%, bigger crowd)</h2><ul id="sugg"></ul>
       <p class="small">Do not send several chunks at the same time or to the same address; do not unshield the exact amount you shielded; waiting helps.</p></div>
   </div>
@@ -71,8 +81,8 @@
 
 <h2>About this sample</h2>
 <p class="small" id="cov"></p>
-<p class="small">How it works: an observer who sees a shield of about your amount followed by an unshield of about your amount, allowing for the fee, can guess they belong together; recent matches count fully and matches older than 14 days count half. The crowd is the number of such shields. GREEN (a weighted crowd of 10 or more) means a big crowd for amount and timing only, not &quot;private&quot;. NO MATCH means no shield of about that amount in the window, so amount matching cannot tie this unshield to a shield in it. An amount with 5 or more decimals is easy to recognise later, so round amounts blend in better.</p>
-<p class="small">Covers amount + timing. Not covered: address reuse (use the command line tool with --to), wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), z-&gt;z graph, cross-pool (Sapling&lt;-&gt;Orchard) moves, off-chain records. The sample is a frozen copy: the command line tool syncs fresh data and cuts its own network access before it looks at your amount.</p>
+<p class="small">How it works: an observer who sees an entry into a shielded pool (a shield, or a move from another pool) of about your amount followed by an unshield of about your amount from the same pool, allowing for the fee, can guess they belong together; recent matches count fully and matches older than 14 days count half. The crowd is the number of such entries into your pool; entries into the other pools are not counted, because they are linkable only through a visible pool move. &quot;Not sure&quot; checks all three pools and shows the worst. GREEN (a weighted crowd of 10 or more) means a big crowd for amount and timing only, not &quot;private&quot;. NO MATCH means no entry of about that amount into the pool in the window, so amount matching cannot tie this unshield to a shield in it. An amount with 5 or more decimals is easy to recognise later, so round amounts blend in better.</p>
+<p class="small">Covers amount + timing within one pool. Not covered: address reuse (use the command line tool with --to), wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), the z-&gt;z graph, links through pool moves beyond their amounts, off-chain records. The sample is a frozen copy: the command line tool syncs fresh data and cuts its own network access before it looks at your amount.</p>
 
 <script>
 "use strict";
@@ -99,8 +109,11 @@ const sigDecimals = (z) => String(z % ZAT).padStart(8, "0").replace(/0+$/, "").l
 function fmtUtc(t) { const i = new Date(t * 1000).toISOString(); return i.slice(0, 10) + " " + i.slice(11, 16) + " UTC"; }
 const fmtAge = (s) => (s >= 2 * DAY ? (s / DAY).toFixed(1) + " days" : (s / 3600).toFixed(1) + " h");
 
-// DATA.s = [[unix time, zatoshi]] of every high-confidence shield in the sample (transparent in, shielded out).
-const SHIELDS = DATA.s, NOW = DATA.cov.last_t;
+// DATA.s = [[unix time, zatoshi, pool index]] of every high-confidence entry into a shielded pool in the sample: a shield
+// (transparent in, shielded out) or a move from another pool. Pool index: 0 sapling, 1 orchard, 2 ironwood.
+const POOLS = ["sapling", "orchard", "ironwood"], ENTRIES = DATA.s, NOW = DATA.cov.last_t;
+// sorted by amount, so `count` looks only at the entries inside the amount window (a month of Ironwood is 25,000 entries)
+const BY_POOL = POOLS.map((_, i) => ENTRIES.filter((e) => e[2] === i).sort((a, b) => a[1] - b[1]));
 const DEFAULTS = { lookback: 30, tol: 0, fee: 50000, now: NOW };
 
 function bounds(mode, zat, p) { return [Math.max(zat - p.tol, 0), zat + (mode === "unshield" ? p.fee : 0) + p.tol]; }
@@ -108,9 +121,11 @@ function inScope(mode, zat, p, t, z) {
   const [lo, hi] = bounds(mode, zat, p);
   return t <= p.now && t >= Math.max(p.now - p.lookback * DAY, 0) && z >= lo && z <= hi;
 }
-function count(mode, zat, p) {
-  let k = 0, w = 0;
-  for (const [t, z] of SHIELDS) if (inScope(mode, zat, p, t, z)) { k++; w += p.now - t > 14 * DAY ? 0.5 : 1; }
+function count(mode, pool, zat, p) {
+  const a = BY_POOL[pool], [lo, hi] = bounds(mode, zat, p);
+  let i = 0, j = a.length, k = 0, w = 0;
+  while (i < j) { const m = (i + j) >> 1; if (a[m][1] < lo) i = m + 1; else j = m; } // first entry with amount >= lo
+  for (; i < a.length && a[i][1] <= hi; i++) { const t = a[i][0]; if (inScope(mode, zat, p, t, a[i][1])) { k++; w += p.now - t > 14 * DAY ? 0.5 : 1; } }
   return [k, w];
 }
 function verdictFor(mode, k, w) {
@@ -119,25 +134,34 @@ function verdictFor(mode, k, w) {
   if (mode === "shield" && k === 0) return "RED";
   return w < 10 ? "AMBER" : "GREEN";
 }
-function popular(mode, zat, p, n) {
+function popular(mode, pool, zat, p, n) {
   const lo = zat - Math.floor(zat / 10), hi = zat + Math.floor(zat / 10);
-  const base = Math.max(count(mode, zat, p)[1], 1);
+  const base = Math.max(count(mode, pool, zat, p)[1], 1);
   const from = Math.max(p.now - p.lookback * DAY, 0);
   const cands = new Set();
-  for (const [t, z] of SHIELDS) if (t <= p.now && t >= from && z >= lo && z <= hi && z !== zat) cands.add(z);
+  for (const [t, z] of BY_POOL[pool]) if (t <= p.now && t >= from && z >= lo && z <= hi && z !== zat) cands.add(z);
   const out = [];
   for (const a of cands) {
-    const [k, weighted] = count(mode, a, p);
+    const [k, weighted] = count(mode, pool, a, p);
     if (weighted > base) out.push({ zat: a, k, weighted, verdict: verdictFor(mode, k, weighted) });
   }
   out.sort((a, b) => b.weighted - a.weighted || Math.abs(a.zat - zat) - Math.abs(b.zat - zat) || a.zat - b.zat);
   return out.slice(0, n);
 }
-function check(mode, zat, p) {
-  const [k, weighted] = count(mode, zat, p);
-  const verdict = verdictFor(mode, k, weighted);
-  const matches = SHIELDS.filter(([t, z]) => inScope(mode, zat, p, t, z)).sort((a, b) => b[0] - a[0]).slice(0, 10).map(([t, z]) => ({ t, zat: z }));
-  return { k, weighted, verdict, odd_amount: sigDecimals(zat) >= 5, matches, suggestions: verdict === "GREEN" ? [] : popular(mode, zat, p, 5) };
+const RANK = { "NO MATCH": 0, GREEN: 1, AMBER: 2, RED: 3 };
+// The worst pool: worse verdict first, then the smaller weighted crowd, then the pool listed first (crowd.rs `worst`).
+const worst = (cs) => cs.slice(1).reduce((a, b) => (RANK[b.verdict] > RANK[a.verdict] || (b.verdict === a.verdict && b.weighted < a.weighted) ? b : a), cs[0]);
+// `pool` is a name from POOLS, or "any": score all three and take the worst.
+function check(mode, zat, p, pool = "any") {
+  const pools = POOLS.map((name, i) => { const [k, weighted] = count(mode, i, zat, p); return { pool: name, k, weighted, verdict: verdictFor(mode, k, weighted) }; });
+  const c = pool === "any" ? worst(pools) : pools[POOLS.indexOf(pool)];
+  const i = POOLS.indexOf(c.pool);
+  const matches = BY_POOL[i].filter(([t, z]) => inScope(mode, zat, p, t, z)).sort((a, b) => b[0] - a[0]).slice(0, 10).map(([t, z]) => ({ t, zat: z }));
+  return {
+    pool: c.pool, k: c.k, weighted: c.weighted, verdict: c.verdict, odd_amount: sigDecimals(zat) >= 5, matches, pools,
+    other_pools_k: pools.reduce((n, o) => n + (o.pool === c.pool ? 0 : o.k), 0),
+    suggestions: c.verdict === "GREEN" ? [] : popular(mode, i, zat, p, 5),
+  };
 }
 
 // ---- page ----
@@ -161,8 +185,10 @@ if (typeof document !== "undefined") {
   const li = (ul, text) => { const e = document.createElement("li"); e.textContent = text; ul.appendChild(e); };
 
   function run() {
-    const mode = $("mode").value;
-    $("amount-hint").textContent = mode === "unshield" ? "The amount the recipient receives." : "The amount you will shield.";
+    const mode = $("mode").value, pool = $("pool").value;
+    put($("pool-label"), mode === "unshield" ? "Pool your funds are in" : "Pool you will shield into");
+    put($("amount-label"), mode === "unshield" ? "Amount in ZEC" : "Amount in ZEC that arrives in the pool (what you shield minus the fee)");
+    $("amount-hint").textContent = mode === "unshield" ? "The amount the recipient receives." : "The amount that arrives in the shielded pool: what you shield minus the fee, not what your wallet sends.";
     const raw = $("amount").value;
     const p = { ...DEFAULTS };
     $("out").hidden = true;
@@ -173,17 +199,21 @@ if (typeof document !== "undefined") {
       p.lookback = nat($("look"), DEFAULTS.lookback); p.tol = nat($("tol"), DEFAULTS.tol); p.fee = nat($("fee"), DEFAULTS.fee);
     } catch (e) { put($("msg"), e.message + " Use digits and at most 8 decimals, for example 1.2497."); return; }
     put($("msg"), "");
-    const r = check(mode, zat, p);
+    const r = check(mode, zat, p, pool);
     const c = DATA.cov;
     const v = $("verdict"); put(v, r.verdict); v.className = r.verdict.replace(" ", "");
     put($("why"), WHY[mode][r.verdict] || "");
+    const into = " into " + r.pool + (pool === "any" ? " (the worst of the three pools)" : "") + " of about " + fmtZec(zat) + " ZEC";
     put($("crowd"), (mode === "unshield"
-      ? r.k + " earlier shields of about " + fmtZec(zat) + " ZEC (allowing for the fee)"
-      : r.k + " other shields of about " + fmtZec(zat) + " ZEC (the decoys for a later unshield of the whole note)")
-      + "; weighted " + r.weighted.toFixed(1) + " (shields older than 14 days count half).");
+      ? r.k + " earlier shields and moves" + into + " (allowing for the fee)"
+      : r.k + " other shields and moves" + into + " (the decoys for a later unshield of the whole note)")
+      + "; weighted " + r.weighted.toFixed(1) + " (entries older than 14 days count half).");
+    $("pools").replaceChildren();
+    if (pool === "any") for (const o of r.pools) li($("pools"), "pool " + o.pool + ": k=" + o.k + " weighted=" + o.weighted.toFixed(1) + " -> " + o.verdict);
+    put($("pool-note"), r.other_pools_k + " entries of about this amount went into the other pools: linkable only through a visible pool move; not counted." + (pool === "any" ? " Funds in another pool? Choose the pool above for a precise answer." : ""));
     const notes = [];
     if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
-    if (c.last_t - c.first_t + 6 * 3600 < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: a shield of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
+    if (c.last_t - c.first_t + 6 * 3600 < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: an entry of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
     put($("note"), notes.join(" "));
     $("matches").replaceChildren(); $("sugg").replaceChildren();
     for (const m of r.matches) li($("matches"), fmtUtc(m.t) + "  " + fmtAge(NOW - m.t) + " before the end of the sample  " + fmtZec(m.zat) + " ZEC");
@@ -194,31 +224,34 @@ if (typeof document !== "undefined") {
     $("out").hidden = false;
   }
 
-  // A real send-max style amount (newest shield minus a 15000 zat fee) whose verdict is `want`; "NO MATCH" tries round amounts.
+  // A real send-max style amount (a recent entry minus a 15000 zat fee) and the pool it entered, whose verdict is `want`;
+  // "NO MATCH" is the first of 1.37, 2.74, ... ZEC (plus 12345 zat) that no pool has an entry for. Only counts, no suggestions.
   function example(want) {
     const p = { ...DEFAULTS };
-    if (want === "NO MATCH") { for (const x of [1, 2, 5, 10, 3, 7, 0.5]) if (check("unshield", x * ZAT, p).verdict === want) return x * ZAT; return null; }
+    const verdictOf = (pool, zat) => { const [k, w] = count("unshield", pool, zat, p); return verdictFor("unshield", k, w); };
+    if (want === "NO MATCH") { for (let n = 1; n < 500; n++) if (POOLS.every((_, i) => verdictOf(i, n * 137000000 + 12345) === want)) return { zat: n * 137000000 + 12345, pool: "any" }; return null; }
     const seen = new Set();
-    for (const [, z] of [...SHIELDS].sort((a, b) => b[0] - a[0])) {
-      if (seen.has(z) || z <= 15000) continue;
-      seen.add(z);
-      if (check("unshield", z - 15000, p).verdict === want) return z - 15000;
+    for (const [, z, i] of [...ENTRIES].sort((a, b) => b[0] - a[0])) {
+      if (seen.has(i + ":" + z) || z <= 15000) continue;
+      seen.add(i + ":" + z);
+      if (verdictOf(i, z - 15000) === want) return { zat: z - 15000, pool: POOLS[i] };
     }
     return null;
   }
 
-  for (const id of ["mode", "amount", "tol", "fee", "look"]) $(id).addEventListener("input", run);
+  for (const id of ["mode", "pool", "amount", "tol", "fee", "look"]) $(id).addEventListener("input", run);
   $("amount").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } });
   for (const b of document.querySelectorAll("button[data-ex]")) {
     b.addEventListener("click", () => {
       const x = example(b.dataset.ex);
       $("mode").value = "unshield";
-      $("amount").value = x === null ? "" : fmtZec(x);
+      $("pool").value = x === null ? "any" : x.pool;
+      $("amount").value = x === null ? "" : fmtZec(x.zat);
       run();
     });
   }
   const c0 = DATA.cov;
-  put($("cov"), "Sample: " + SHIELDS.length + " shield events from public Zcash mainnet data, blocks " + c0.first_h + ".." + c0.last_h + " (" + fmtUtc(c0.first_t) + " .. " + fmtUtc(c0.last_t) + "). Ages are measured from the end of the sample; shields before " + fmtUtc(c0.first_t) + " are not counted.");
+  put($("cov"), "Sample: " + ENTRIES.length + " entries into a shielded pool (" + POOLS.map((n, i) => BY_POOL[i].length + " " + n).join(", ") + "; shields and moves from another pool) from public Zcash mainnet data, blocks " + c0.first_h + ".." + c0.last_h + " (" + fmtUtc(c0.first_t) + " .. " + fmtUtc(c0.last_t) + "). Ages are measured from the end of the sample; entries before " + fmtUtc(c0.first_t) + " are not counted.");
   run();
 }
 </script>

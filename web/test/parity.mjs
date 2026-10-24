@@ -148,7 +148,7 @@ synth.push(into("mixed", "shield", zec(25), 1, { confidence: "low" }), into("iro
 // ties between pools: 26 ZEC entered each pool twice; 27 ZEC entered Orchard and Ironwood twice, Sapling never
 for (const pool of POOLS) for (let i = 0; i < 2; i++) synth.push(into(pool, "shield", zec(26), i));
 for (const pool of ["orchard", "ironwood"]) for (let i = 0; i < 2; i++) synth.push(into(pool, "move", zec(27), i));
-const cov = { first_h: 3_000_000, first_t: T - 31 * DAY, last_h: 3_000_000 + n, last_t: T };
+const cov = { version: 2, first_h: 3_000_000, first_t: T - 31 * DAY, last_h: 3_000_000 + n, last_t: T };
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zcrowd-parity-"));
 try {
   const file = path.join(dir, "synth.ndjson");

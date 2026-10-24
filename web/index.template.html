@@ -220,7 +220,7 @@ if (typeof document !== "undefined") {
     const notes = [];
     if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
     if (r.verdict === "NO MATCH" || r.verdict === "RED") notes.push("Note: shields after " + fmtUtc(c.last_t) + " (last synced block) are not counted.");
-    if (c.last_t - c.first_t + 6 * 3600 < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: an entry of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
+    if (c.last_t - c.first_t < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: an entry of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
     put($("note"), notes.join(" "));
     $("matches").replaceChildren(); $("sugg").replaceChildren();
     for (const m of r.matches) li($("matches"), fmtUtc(m.t) + "  " + fmtAge(NOW - m.t) + " before the end of the sample  " + fmtZec(m.zat) + " ZEC");

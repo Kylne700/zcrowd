@@ -231,7 +231,7 @@ Decisions worth a reviewer's eye:
 ### Measured sync times (release build, 2026-10-24, server `zec.rocks`)
 
 The release binary (`cargo build --release -p zcrowd`, 1 min 13 s) synced about one day (1297 blocks, 2134 to 2188
-candidate transactions) three times, each into an empty output directory. The machine was shared with other work (load
+candidate transactions) four times, each into an empty output directory. The machine was shared with other work (load
 average 2 to 12 on 20 cores), so these show what a run looks like, not a clean benchmark. "Ready" is the time from
 starting the program to the connection being up (for Tor: the Tor start, with its state directory new or kept).
 
@@ -239,17 +239,30 @@ starting the program to the connection being up (for Tor: the Tor start, with it
 |---|---|---|---|---|
 | Tor, new state directory | 22 s | 101 s | 2188 in 743 s (2.9 per second) | 14 min 26 s |
 | Tor, state directory kept from the run above | 5 s | 132 s | 2159 in 434 s (5.0 per second) | 9 min 31 s |
+| Tor, new state directory (run later, beside the 30-day run) | 34 s | 18 s | 2134 in 204 s (10.4 per second) | 4 min 17 s |
 | `--no-tor` | 1 s | 2.6 s | 2134 in 60 s (36 per second) | 63 s |
 
-A 30-day sync over Tor (`--days 30`, the state directory of the runs above, an empty output directory): the 36,289 blocks took 777 s (13 min), then the 75,522 candidate transactions came at 10 to 15 per second. The
-run was still going when this was written: 12,916 transactions after 32 minutes, so the whole run is projected at about
-2 h 15 min (NOT VERIFIED until it finishes).
+A 30-day sync over Tor (`--days 30`, an empty output directory, the Tor state directory of the runs above) took
+2 h 25 min (18:34 to 20:59 UTC) in two processes of the same command. The first read the 36,289 blocks in 777 s, fetched
+transactions at 10 to 13 per second for about 20 minutes, then slowed down (4.7, 2.5, then 0.9 to 1.6 per second) and was
+stopped by me with `kill` after 70 min 30 s with 19,159 of 75,522 transactions cached. A fresh process that synced one day
+beside it ran at 10.4 per second, so the server and Tor as a whole were not slow: the slowdown stayed with that process.
+The second process (the same command 5 s later) read the blocks again (blocks are not cached) in 477 s, took 18,922
+transactions from the cache and fetched the other 56,447 in 66 min (14.2 per second, 13.7 to 16.6 in every 10-minute
+window), and ended with exit code 0 after 74 min; its integrity line: 75,369 of 75,369 candidates recomputed, 0 did not
+match. On the 34,705 blocks that it and the direct 30-day sync of the Ironwood stage both cover, the 67,965 events are
+identical line for line. One process without the slow phase would have taken about 1.6 to 2.1 hours (a projection from
+the two rates, NOT VERIFIED as one run). The numbers are from one occasion.
 
-Over Tor the speed varied a lot between runs of the same size: the transactions came at 2.9, 5.0 and 10 to 15 per second,
-and 2000 blocks took 16 to 85 s per request (median 33 s over 19 requests). With at most 8 requests in flight that is
-0.5 to 2.7 s per transaction request. What sets the pace (the circuit, the exit relay, the server) was not tested. The
-README's earlier "a one-day sync took 20 to 40 s over Tor" (nine runs, debug build) does not match these runs; the ranges
-and candidate counts of those runs are not recorded here (a day holds about 2100 candidates now).
+Over Tor the speed varies a lot, between runs and inside one run: one-day runs went at 2.9, 5.0 and 10.4 transactions
+per second, the 30-day processes at 10 to 13, then 1.3, then 14 to 17; 2000 blocks took 16 to 85 s per request in the first
+30-day process (median 33 s) and about 26 s in the second. What sets the pace was not tested. Facts in the code that fit a
+cause that stays with one process: all requests of a run share one HTTP/2 connection (one Tor stream, one circuit), a
+request may wait 60 s per attempt (5 attempts), and `buffered(8)` in `resolve()` returns results in order, so one slow
+request holds back the seven behind it. Stopping the slow process and running the same command again recovered the
+pace (the second process above). The README's earlier "a one-day sync took 20 to 40 s over Tor" (nine runs, debug
+build) does not match these runs; the ranges and candidate counts of those runs are not recorded here (a day holds
+about 2100 candidates now).
 
 ### Final run (review-fix stage, last code commit a29b5d3)
 
@@ -393,6 +406,14 @@ no other remote.
 - Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
   it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage
   timed Tor syncs of one and of 30 days (see "Measured sync times").
+- A Tor sync can end on a stream error in the middle of the block crawl (seen once in several dozen requests: `Error:
+  block stream` / `Stream not connected`). `blocks()` in `source.rs` retries only the call that opens the stream and blocks
+  are not cached, so a re-run crawls them again (the transaction cache is kept). Not changed.
+- A long Tor sync can slow down for good (30 days: 10 to 13 per second for 20 minutes, then 1.3 per second for 35
+  minutes, while a fresh process beside it ran at 10.4). The percent progress lines went quiet for those 35 minutes.
+  Stopping it and running the same command again fixed it once. Not changed: several connections, unordered buffering
+  in `resolve()` (`ingest.rs:221`, `MAX_CONCURRENCY` is 8), a time-based progress line and a retry of a whole block range
+  are open design choices, each of which needs a test against the server's load limits.
 - The sample goes stale: after 2026-10-24 about 15:05 UTC `check` on it prints stale-data warnings (the README says so).
 - `data/` (1.5 GB on disk, 67,977 raw transactions plus the events file, gitignored) from the 30-day sync is left in
   the working tree, and `target/debug/zcrowd` is a fresh build for the video agent.

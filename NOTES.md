@@ -101,6 +101,25 @@ Decisions:
   reviewer's repro (40 shields of blocks 3528000..3528199) is a test over all 126 Ironwood shields of that range on the
   sample: none gives a false NO MATCH.
 
+The reviewer's exact 40 (research/43 S1-1: their saved probe output for blocks 3528000..3528048, read only) were
+replayed against the committed sample: all 40 are High Ironwood shields with the probe's amount, and `check --unshield
+<shield - 15000>` (default pool) gives AMBER 19, RED 15, GREEN 6, NO MATCH 0 (their run on the Ironwood-blind sample:
+NO MATCH 36, AMBER 3, RED 1). The probe itself was not run again; a test covers all 126 Ironwood shields of blocks
+3528000..3528199. Of the 20 events of research/44, 19 equal the explorer in kind, pool and amount; #7 has the explorer's
+direction and pool and the amount of A11 (see the first decision).
+
+Evidence by finding (`cargo test --workspace` runs every test named here; the e2e steps and the parity run are noted):
+
+| finding | where |
+|---|---|
+| S1-1 Ironwood data is fetched, no false NO MATCH | `decode_shield_into_ironwood_only`, `e11_ironwood_only_shield_is_counted`, `a_send_max_round_trip_through_an_ironwood_shield_is_never_a_false_no_match`, e2e round trip of `43bdcfaf...` |
+| S1-2 decode reads all three balances, books must close | `decode_two_pool_unshield_e14` (a57f5cd4... = 134,225,000), `decode_three_pool_unshield_1`, `decode_three_pool_unshield_6`, `decode_two_pool_unshield_9`, `numbers_that_do_not_close_are_refused_not_clamped`, `the_twenty_events_of_research_44_decode_as_the_explorers_show` |
+| S1-3 one crowd per pool | `e12_other_pools_are_not_counted_and_any_is_the_worst_pool`, `worst_pool_order_and_ties`, `cli_check_pool_option_scores_one_pool_and_any_shows_the_worst`, e2e 125 ZEC (Sapling k=40, Ironwood NO MATCH), parity (every pool setting) |
+| S2-4 `--shield X` is what arrives in the pool | `decode_shield_into_ironwood_while_orchard_pays_in_7`, `shield_mode_counts_entries_into_the_chosen_pool_only`; help text, prompt, README and web label say "arrives in the shielded pool" |
+| S3-2 empty range is an error | `a_long_range_without_any_candidate_is_an_error` |
+| S3-4 coinbase is `CompactTx.index == 0` | `candidate_kinds_cover_coinbase_and_moves`, `decode_coinbase_shield_into_ironwood` |
+| E11, E12, E13, E14, E15 | `e11_ironwood_only_shield_is_counted`, `e12_other_pools_are_not_counted_and_any_is_the_worst_pool`, `e13_a_move_into_ironwood_is_a_candidate_for_an_ironwood_unshield` (and `decode_move_into_ironwood`), `decode_two_pool_unshield_e14`, `e15_a_shielded_coinbase_is_an_entry` (and `shielded_coinbase_entries_in_the_sample_are_counted`) |
+
 Left for the next stage, not touched: S1-4, S2-1, S2-2, S2-3, S3-1, S3-3, S3-5, S3-6, S3-7, S4.
 
 NOT VERIFIED in this stage: the five new fixtures were not compared with an explorer (the 20 events of research/44 were);

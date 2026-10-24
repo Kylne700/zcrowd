@@ -42,8 +42,8 @@ check_links() {
   case $2 in
     *linux*)
       ldd "$1"
-      # glibc and the system SQLite (libsqlite3-sys is not bundled yet). Anything else is a decision for a person.
-      bad=$(ldd "$1" | awk '{print $1}' | grep -Ev '^(linux-vdso\.so\.1|/lib64/ld-linux-x86-64\.so\.2|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|libsqlite3\.so\.0)$' || true)
+      # Only glibc (SQLite is built in). Anything else is a decision for a person.
+      bad=$(ldd "$1" | awk '{print $1}' | grep -Ev '^(linux-vdso\.so\.1|/lib64/ld-linux-x86-64\.so\.2|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1)$' || true)
       ;;
     *apple*)
       otool -L "$1"

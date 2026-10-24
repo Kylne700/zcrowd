@@ -93,13 +93,6 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
-      # libsqlite3-sys links the system SQLite (Linux and macOS have one, Windows does not) and finds it through vcpkg.
-      - name: SQLite for the Windows link
-        if: runner.os == 'Windows'
-        run: |
-          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install sqlite3:x64-windows-static-md
-          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
-
       - name: Cargo.lock is up to date
         run: cargo fetch --locked
 

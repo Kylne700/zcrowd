@@ -9,6 +9,8 @@ description = "Shield/unshield event extraction and amount-crowd scoring for Zca
 anyhow = "1"
 futures = "0.3"
 hex = "0.4"
+# Tor's directory cache (arti) links SQLite. Built in, so a clean Windows or macOS machine needs no system SQLite.
+libsqlite3-sys = { version = "0.37", features = ["bundled"] }
 ripemd = "0.1"
 sha2 = "0.10"
 prost = "0.14.4"

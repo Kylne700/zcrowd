@@ -73,7 +73,10 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
             st.blocks += 1;
             let cov = st.coverage.get_or_insert(Coverage { first_h: blk.h, first_t: blk.t, last_h: blk.h, last_t: blk.t });
             cov.last_h = blk.h;
-            cov.last_t = blk.t;
+            // Block times are not monotonic (a block may be stamped earlier than its predecessor): the window's times are
+            // the extremes seen, so no event of the window lies after `now` and is mistaken for the future.
+            cov.first_t = cov.first_t.min(blk.t);
+            cov.last_t = cov.last_t.max(blk.t);
             for t in &blk.txs {
                 st.txs += 1;
                 if !t.shielded {
@@ -157,8 +160,9 @@ pub async fn resolve<S: BlockSource>(src: &S, cands: &[Cand], cache: &RawCache, 
     let mut results = stream::iter(cands)
         .map(|c| async move {
             // The server is not trusted: bytes count only if they hash to the id that was asked for.
-            // A cached file gets the same test; one that fails is fetched again.
-            let cached = cache.get(&c.txid)?.filter(|r| txid_of(r, c.h).is_ok_and(|id| id == c.txid));
+            // A cached file gets the same test; one that fails, or cannot be read as hex at all, is fetched again
+            // and overwritten.
+            let cached = cache.get(&c.txid).ok().flatten().filter(|r| txid_of(r, c.h).is_ok_and(|id| id == c.txid));
             let cached_hit = cached.is_some();
             let raw = match cached {
                 Some(r) => r,

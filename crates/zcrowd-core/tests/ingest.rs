@@ -100,6 +100,24 @@ async fn wrong_or_broken_transactions_are_dropped_counted_and_never_cached() {
     assert_eq!(cache.get(&swapped).unwrap(), Some(clean.raw_tx(&swapped).await.unwrap().0));
 }
 
+// A cache file that is not even hex (a disk error, an editor, a half-written copy) costs one fetch, not the whole sync.
+#[tokio::test]
+async fn a_corrupt_cache_file_is_fetched_again_and_overwritten() {
+    let src = fixtures();
+    let (c, _) = candidates(&src, 3_520_900, 3_522_700).await.unwrap();
+    let cache = cache("a9-corrupt");
+    let first = resolve(&src, &c, &cache, 4).await.unwrap();
+    assert_eq!((first.events.len(), first.fetched), (3, 3));
+    let file = |i: usize| cache.0.join(format!("{}.hex", c[i].txid));
+    std::fs::write(file(0), "not hex at all").unwrap();
+    std::fs::write(file(1), "abc").unwrap(); // odd length
+    let again = resolve(&src, &c, &cache, 4).await.unwrap();
+    assert_eq!((again.events.len(), again.fetched, again.from_cache), (3, 2, 1));
+    // the bad files were replaced by the real bytes
+    assert_eq!(cache.get(&c[0].txid).unwrap(), Some(src.raw_tx(&c[0].txid).await.unwrap().0));
+    assert_eq!(cache.get(&c[1].txid).unwrap(), Some(src.raw_tx(&c[1].txid).await.unwrap().0));
+}
+
 /// A chain of synthetic compact blocks, served like a server would (every height, linked by hashes).
 struct Chain(Vec<BlockSummary>);
 
@@ -219,4 +237,18 @@ async fn a_long_range_without_any_candidate_is_an_error() {
     let mut c = quiet(500);
     c.0[3].txs.push(tx(2, 0, 0, true, true, false));
     assert!(crawl_err(&c, 1_000, 1_499).await.contains("500 blocks"));
+}
+
+// Block times are not monotonic: the median-time-past rule lets a block be stamped earlier than the one before it.
+#[tokio::test]
+async fn the_windows_times_are_the_extremes_of_the_block_times_not_those_of_its_edge_blocks() {
+    let mut c = chain(1_000, 100);
+    c.0[40].t = 1_800_000_000; // stamped later than the last block
+    c.0[60].t = 1_600_000_000; // stamped earlier than the first
+    let cov = candidates(&c, 1_000, 1_099).await.unwrap().1.coverage.unwrap();
+    assert_eq!((cov.first_h, cov.last_h), (1_000, 1_099));
+    assert_eq!((cov.first_t, cov.last_t), (1_600_000_000, 1_800_000_000));
+    // in order, as before: the first and the last block
+    let cov = candidates(&chain(1_000, 100), 1_000, 1_099).await.unwrap().1.coverage.unwrap();
+    assert_eq!((cov.first_t, cov.last_t), (1_700_001_000, 1_700_001_099));
 }

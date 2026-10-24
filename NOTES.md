@@ -418,7 +418,7 @@ this stage), so every sample number below is a count on the unchanged sample.
   whole workflow. NOT VERIFIED: no CI run exists (the lead pushes to the private origin later); `actionlint` is not installed,
   the file was parsed with PyYAML only (jobs: test, sandbox, e2e, browsers, deny).
 
-The code findings of the second independent review (research/46, G2), each with a test that failed on the code before its fix
+The code findings of the second independent review (G2), each with a test that failed on the code before its fix
 (the page gets the same logic in `web/index.template.html`, `web/index.html` is rebuilt, and `web/test/parity.mjs` compares
 it with the Rust output wherever the case is reachable):
 
@@ -469,7 +469,7 @@ it with the Rust output wherever the case is reachable):
   ptrace/`process_vm_writev`/`pidfd_getfd`, (i) the README examples: documentation or a known residue, in the handoff
   `S9d-docs.md`, no code change. (g) `input_address` still guesses a p2sh address for a non-coinbase bare-multisig spend
   (decode.rs, S9c's file; 0 cases in the sample): not changed. **(h) NOT DONE:** no note when a Low-confidence entry falls in
-  the amount window (research/46 says "fix if wanted"; all 140 Low events of the sample are unshields, so no entry is lost there;
+  the amount window (the review says "fix if wanted"; all 140 Low events of the sample are unshields, so no entry is lost there;
   it would need a note in the text, the JSON, the report and the page, each with a parity case).
 - **The P3 flake of the audit (9048c4d; the commit message labels it "F8 / G2 flake": it is item 6 of the S9d brief, not F8).** The pre-scan
   for the random typed values read the ignored `data/` directory (1.6 GB), where a random 9-digit value occurs by chance in

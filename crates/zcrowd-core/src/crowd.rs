@@ -227,7 +227,7 @@ mod tests {
         assert_eq!((edge(X + 50_000), edge(X + 50_001), edge(X - 1), edge(X)), (1, 0, 0, 1));
     }
 
-    // research/46 F6: "no entry at all in the window" is what makes an Orchard NO MATCH say nothing; the same window and the same
+    // NOTES S9d F6: "no entry at all in the window" is what makes an Orchard NO MATCH say nothing; the same window and the same
     // definition of an entry as the crowd (shield or move, High confidence, inside the lookback), whatever the amount.
     #[test]
     fn has_entries_looks_at_the_window_the_kind_and_the_confidence_not_the_amount() {
@@ -410,7 +410,7 @@ mod tests {
         assert!(matches!(address_check(&evs, "t1dst", NOW), AddrFinding::UsedAsDestination { n: 1, .. }));
     }
 
-    // research/46 F5: a shield cannot go into Orchard (ZIP 258), so shield mode scores Sapling and Ironwood only; an unshield
+    // NOTES S9d F5: a shield cannot go into Orchard (ZIP 258), so shield mode scores Sapling and Ironwood only; an unshield
     // can leave any pool. Each listed pool counts the entries into itself and no others.
     #[test]
     fn shield_mode_counts_entries_into_the_chosen_pool_only_and_never_scores_orchard() {

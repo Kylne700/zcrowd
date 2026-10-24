@@ -248,7 +248,7 @@ pub fn read_ndjson(path: &std::path::Path) -> Result<Vec<Event>> {
         .collect()
 }
 
-/// serde reports the position inside the one line it was given (always "line 1"): say the line of the file instead (research/46 F8).
+/// serde reports the position inside the one line it was given (always "line 1"): say the line of the file instead (NOTES S9d F8).
 fn bad_line(n: usize, e: &serde_json::Error) -> anyhow::Error {
     let s = e.to_string();
     anyhow::anyhow!("line {n}, column {}: {}", e.column(), s.rsplit_once(" at line ").map_or(s.as_str(), |(msg, _)| msg))

@@ -13,7 +13,7 @@ pub struct Suggestion {
 /// Up to `n` amounts within +-10% of `zat` that have a bigger crowd than `zat` itself (and more than one
 /// match), biggest first; ties: closer to `zat`, then smaller amount. `judged` are the pools the check weighs: its
 /// headline crowd is the one pool, or the worst of several (`--pool any`). Every amount, `zat` included, is scored as the
-/// check would score it, so a suggestion never promises more than the check shows (research/46 F2). The amounts offered are
+/// check would score it, so a suggestion never promises more than the check shows (NOTES S9d F2). The amounts offered are
 /// those `pool` (the one that decided the verdict) saw entries at. `judged` is never empty.
 /// shortcut: an amount only another judged pool saw entries at is not offered, though checking it could read better.
 pub fn popular(events: &[Event], user: Kind, pool: Pool, judged: &[Pool], zat: u64, p: &Params, n: usize) -> Vec<Suggestion> {
@@ -93,7 +93,7 @@ mod tests {
         }
     }
 
-    // research/46 F2. 2.0 ZEC went into Sapling once and Ironwood 20 times, 2.1 into Sapling 15 times and Ironwood once, 1.95
+    // NOTES S9d F2. 2.0 ZEC went into Sapling once and Ironwood 20 times, 2.1 into Sapling 15 times and Ironwood once, 1.95
     // into both 12 times.
     #[test]
     fn a_suggestion_is_judged_by_the_worst_of_the_pools_the_check_weighs() {

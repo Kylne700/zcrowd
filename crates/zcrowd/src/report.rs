@@ -28,7 +28,7 @@ pub fn run(out: &Path, data: &Path) -> Result<()> {
 /// moves) into its own pool before it.
 /// Counts in the order NO MATCH, RED, AMBER, GREEN, and how many of the NO MATCH left Orchard when the data holds no entry into
 /// Orchard at all (0 otherwise): nothing has been able to enter it since NU6.3 (ZIP 258), so they have nothing to match whatever
-/// their amount (research/46 F6).
+/// their amount (NOTES S9d F6).
 fn profile(evs: &[Event], last_t: u64) -> ([usize; 4], usize) {
     // Entries per pool sorted by amount: an unshield then scores only the entries of about its own amount, so a month of
     // data takes seconds instead of minutes. Same result as scoring against every event.

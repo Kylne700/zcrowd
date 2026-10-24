@@ -85,7 +85,7 @@ PY
 scan() { local d=$1; shift; (cd "$d" && git grep --no-index -lF -e "$ADDR" -e "$AMT" -e "$ZAT" -e "$H160" -- . "$@"); }
 # scan_repo <dir> [pathspec...]: the same for the files git shows (tracked, or untracked and not ignored), with no user-wide ignore rules.
 # The ignored data/ (about 1.6 GB of chain data) and target/ are not what P3 is about: a check that wrote there is caught by the
-# "files changed" test below, and a random 9-digit value turns up in that much data by chance in about 2% of runs (research/46).
+# "files changed" test below, and a random 9-digit value turns up in that much data by chance in about 2% of runs (NOTES S9d).
 scan_repo() { local d=$1; shift; (cd "$d" && git -c core.excludesFile=/dev/null grep --no-index --exclude-standard -lF -e "$ADDR" -e "$AMT" -e "$ZAT" -e "$H160" -- . "$@"); }
 if scan_repo . ':!target' >/dev/null 2>&1; then die "P3 the random test values were already in the tree (run again)"; fi
 # the detectors themselves must work: a file holding the values is found, and scan_repo skips an ignored one but not a plain one

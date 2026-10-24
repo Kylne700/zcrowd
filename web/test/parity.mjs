@@ -49,8 +49,8 @@ function cli(data, mode, amount, c) {
 let compared = 0;
 const ties = { sample: 0, synthetic: 0 }; // comparisons whose listed matches include two with the same time
 const missingLine = { yes: 0, no: 0 }; // comparisons with and without the "shields after ... are not counted" line
-const orchardLine = { yes: 0, no: 0 }; // comparisons with and without the "orchard has no entries at all" note (research/46 F6)
-const shortLine = { yes: 0, no: 0 }; // comparisons with and without the "data covers less than the lookback" warning (research/46 S4-1)
+const orchardLine = { yes: 0, no: 0 }; // comparisons with and without the "orchard has no entries at all" note (NOTES S9d F6)
+const shortLine = { yes: 0, no: 0 }; // comparisons with and without the "data covers less than the lookback" warning (NOTES S9d S4-1)
 function same(page, data, label, mode, amount, c = {}) {
   const want = cli(data, mode, amount, c);
   const settings = { lookback: c.look ?? 30, tol: c.tol ?? 0, fee: c.fee ?? 50000, now: page.now };
@@ -64,11 +64,11 @@ function same(page, data, label, mode, amount, c = {}) {
   const got = page.check(mode, page.parse(amount), settings, c.pool ?? "any");
   const view = (r, matches) => ({ pool: r.pool, k: r.k, weighted: r.weighted, verdict: r.verdict, odd_amount: r.odd_amount, matches, pools: r.pools, other_pools_k: r.other_pools_k, suggestions: r.suggestions });
   assert.deepStrictEqual(view(got, page.txids(got)), view(want, want.matches), `${label}: ${mode} ${amount} ${JSON.stringify(c)}`);
-  // the line about shields after the last block: the page decides it from the same pools as the CLI (research/46 F1)
+  // the line about shields after the last block: the page decides it from the same pools as the CLI (NOTES S9d F1)
   const wantLine = want.notes.some((n) => /^shields after .* \(last synced block\) are not counted$/.test(n));
   assert.equal(page.missing(got, c.pool ?? "any"), wantLine, `${label}: missing-shields line, ${mode} ${amount} ${JSON.stringify(c)}`);
   missingLine[wantLine ? "yes" : "no"]++;
-  // the note about an Orchard without any entry in the window: the page decides it from the same window as the CLI (research/46 F6)
+  // the note about an Orchard without any entry in the window: the page decides it from the same window as the CLI (NOTES S9d F6)
   const wantOrchard = want.notes.some((n) => /^note: orchard has no entries at all/.test(n));
   assert.equal(page.orchardEmpty(mode, c.pool ?? "any", settings), wantOrchard, `${label}: orchard-empty note, ${mode} ${amount} ${JSON.stringify(c)}`);
   orchardLine[wantOrchard ? "yes" : "no"]++;
@@ -169,7 +169,7 @@ synth.push(into("mixed", "shield", zec(25), 1, { confidence: "low" }), into("iro
 // ties between pools: 26 ZEC entered each pool twice; 27 ZEC entered Orchard and Ironwood twice, Sapling never
 for (const pool of POOLS) for (let i = 0; i < 2; i++) synth.push(into(pool, "shield", zec(26), i));
 for (const pool of ["orchard", "ironwood"]) for (let i = 0; i < 2; i++) synth.push(into(pool, "move", zec(27), i));
-// pools that disagree (research/46 F2): 200 ZEC entered Sapling once and Ironwood 20 times, 210 ZEC Sapling 15 times and Ironwood once,
+// pools that disagree (NOTES S9d F2): 200 ZEC entered Sapling once and Ironwood 20 times, 210 ZEC Sapling 15 times and Ironwood once,
 // 195 ZEC both 12 times
 for (const [a, sapling, ironwood] of [[200, 1, 20], [210, 15, 1], [195, 12, 12]]) {
   for (let i = 0; i < sapling; i++) synth.push(into("sapling", "shield", zec(a), i));
@@ -236,7 +236,7 @@ try {
     }
   }
   assert.ok(judged > 30, `only ${judged} suggestions were compared with their own check`);
-  // the note about an Orchard without any entry in the window follows the lookback (research/46 F6). Here Orchard's only entry is 20
+  // the note about an Orchard without any entry in the window follows the lookback (NOTES S9d F6). Here Orchard's only entry is 20
   // days old; a future one, a Low-confidence one and an unshield out of it are no entries. (The real sample has no Orchard entry at
   // all, the data above has recent ones.)
   const orchardOld = [
@@ -251,7 +251,7 @@ try {
   const empty = (look, mode = "unshield", pool = "any") => op.orchardEmpty(mode, pool, { ...P, lookback: look });
   assert.deepEqual([7, 19, 20, 30].map((look) => empty(look)), [true, true, false, false], "an entry 20 days old is inside a lookback of 20 days, not of 19");
   assert.deepEqual([empty(19, "unshield", "orchard"), empty(19, "unshield", "sapling"), empty(19, "shield"), empty(19, "shield", "sapling")], [true, false, false, false], "only an unshield judged against Orchard gets the note");
-  // data of 29 days 23 h is short for a lookback of 30 days (no slack of hours: research/46 S4-1), not for one of 29
+  // data of 29 days 23 h is short for a lookback of 30 days (no slack of hours: NOTES S9d S4-1), not for one of 29
   assert.deepEqual([29, 30, 31].map((look) => op.shortWindow({ ...P, lookback: look })), [false, true, true]);
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });

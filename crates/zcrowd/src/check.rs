@@ -142,7 +142,7 @@ pub fn run(a: Args) -> Result<()> {
     // The newest block is where the data ends: a verdict that rests on finding nothing (NO MATCH) or one entry (RED) can
     // still be overturned by shields after it, so these two always say so, however fresh the data is. Under `--pool any` that
     // holds for every pool shown, not only the worst one: GREEN outranks NO MATCH, so a pool without an entry never becomes the
-    // verdict and its caveat would never show (research/46 F1). Not for Orchard: nothing can enter it from NU6.3 on (ZIP 258),
+    // verdict and its caveat would never show (NOTES S9d F1). Not for Orchard: nothing can enter it from NU6.3 on (ZIP 258),
     // so later blocks cannot change its crowd.
     // shortcut: data that ends before NU6.3 is not special-cased, Orchard is left out of this line for it too.
     let rests_on_missing = |v: Verdict, pool: Pool| pool != Pool::Orchard && matches!(v, Verdict::NoMatch | Verdict::Red);
@@ -151,7 +151,7 @@ pub fn run(a: Args) -> Result<()> {
         .then(|| format!("shields after {} (last synced block) are not counted", fmt_utc(cov.last_t)));
 
     // Nothing has been able to enter Orchard since NU6.3 (ZIP 258), so when the data holds no Orchard entry at all, an Orchard
-    // note was shielded before the window and a NO MATCH for it says nothing (research/46 F6). Said whenever Orchard is judged.
+    // note was shielded before the window and a NO MATCH for it says nothing (NOTES S9d F6). Said whenever Orchard is judged.
     // shortcut: not keyed on height, data from before NU6.3 that holds no Orchard entry gets the line too.
     let orchard_empty =
         user == Kind::Unshield && matches!(a.pool, PoolArg::Any | PoolArg::Orchard) && !has_entries(&events, Pool::Orchard, &p);
@@ -185,7 +185,7 @@ pub fn run(a: Args) -> Result<()> {
     };
     // The amount typed is never printed back: it may sit in a terminal's scrollback or a CI log. What is printed below is derived
     // from it, though: the amounts and txids of the matches (an unshield's lie within the fee allowance above the typed amount, so
-    // they give it away to about 0.0005 ZEC) and the nearby amounts, so the output is as sensitive as the amount (research/46 F3).
+    // they give it away to about 0.0005 ZEC) and the nearby amounts, so the output is as sensitive as the amount (NOTES S9d F3).
     println!(
         "check: {what}; pool {}; fee allowance {} zat, tolerance {} zat, lookback {} days",
         if a.pool == PoolArg::Any {
@@ -289,7 +289,7 @@ pub fn run(a: Args) -> Result<()> {
     Ok(())
 }
 
-/// The line about an empty Orchard crowd (research/46 F6); the web page says the same in its own words.
+/// The line about an empty Orchard crowd (NOTES S9d F6); the web page says the same in its own words.
 const ORCHARD_EMPTY: &str = "note: orchard has no entries at all in this window, and none can arrive since NU6.3 (ZIP 258). An Orchard note was shielded before the window, so NO MATCH for orchard says nothing about it: sync more days (sync --days N) and check with --lookback-days N to reach back to your shield";
 
 /// After a sync the newest block is minutes old; older than this gets the stale warning.

@@ -184,10 +184,10 @@ async function privacy(browser, origin, url) {
   }
   // "Not sure" (the default) scores all three pools and shows the worst: 1.0 ZEC has no crowd in Sapling or Orchard
   // but 162 entries into Ironwood. A pool without an entry is NO MATCH, which GREEN outranks, so the missing-shields line has
-  // to follow every pool shown (research/46 F1): Sapling is NO MATCH for 1.0 and for 1.23456789 (Orchard never counts)
+  // to follow every pool shown (NOTES S9d F1): Sapling is NO MATCH for 1.0 and for 1.23456789 (Orchard never counts)
   const missing = `shields after ${LAST_UTC} (last synced block) are not counted`;
   // The sample holds no Orchard entry at all (nothing can enter it since NU6.3, ZIP 258): when Orchard is judged, a NO MATCH for it says
-  // nothing about a note shielded before the window (research/46 F6)
+  // nothing about a note shielded before the window (NOTES S9d F6)
   const orchardEmpty = "Note: Orchard has no entries at all in the lookback window of this sample, and none can arrive since NU6.3 (ZIP 258). An Orchard note was shielded before the window, so NO MATCH for Orchard says nothing about it: use the command line tool (sync --days N, then check --lookback-days N) to reach back to your shield.";
   assert.equal(verdicts["1.0"].verdict, "GREEN");
   assert.equal(verdicts["1.0"].note, `Note: ${missing}. ${orchardEmpty}`);
@@ -195,7 +195,7 @@ async function privacy(browser, origin, url) {
   assert.match(verdicts["1.23456789"].note, /easy to recognise later/);
   assert.ok(verdicts["1.23456789"].note.includes(missing) && verdicts["1.23456789"].note.includes(orchardEmpty), verdicts["1.23456789"].note);
   await scan("AMBER");
-  // the first suggestion promises what typing that amount shows (research/46 F2): crowd and verdict are the worst of the three pools
+  // the first suggestion promises what typing that amount shows (NOTES S9d F2): crowd and verdict are the worst of the three pools
   const first = (await page.locator("#sugg li").first().innerText()).match(/^(\d+\.\d{8}) ZEC -> crowd (\d+) \(weighted (\d+\.\d), (GREEN|AMBER|RED)\)$/);
   assert.ok(first, "no suggestion line for 1.23456789");
   await amount.fill(first[1]);

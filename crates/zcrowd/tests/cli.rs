@@ -72,7 +72,7 @@ fn run_env(args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> (bool, S
 }
 
 /// Types `s` into the child and closes its stdin. A child that refuses its arguments exits without reading it, so on a busy machine the
-/// pipe can be broken before we write: that is the child's answer, not a failure of the test (research/46 F7). Any other error is one.
+/// pipe can be broken before we write: that is the child's answer, not a failure of the test (NOTES S9d F7). Any other error is one.
 fn feed(child: &mut Child, s: &str) {
     if let Err(e) = child.stdin.take().unwrap().write_all(s.as_bytes()) {
         assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "writing to the child's stdin: {e}");
@@ -307,7 +307,7 @@ fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
     assert!(!ok && err.contains("--pool"), "{err}");
 }
 
-// research/46 F5: from NU6.3 on no value may enter Orchard (ZIP 258), so a shield cannot go into it. Orchard's empty crowd
+// NOTES S9d F5: from NU6.3 on no value may enter Orchard (ZIP 258), so a shield cannot go into it. Orchard's empty crowd
 // used to make every `--shield` under the default `--pool any` RED. Now `any` is the worse of Sapling and Ironwood, and
 // `--pool orchard` is refused before the amount is read.
 #[test]
@@ -385,7 +385,7 @@ fn every_suggestion_is_what_its_own_check_says(f: &str, mode: &str, amount: &str
     suggestions.len()
 }
 
-// research/46 F2: under `--pool any` the suggestions were scored in the one pool that decided the verdict, so a "GREEN"
+// NOTES S9d F2: under `--pool any` the suggestions were scored in the one pool that decided the verdict, so a "GREEN"
 // suggestion could be RED the moment the user checked that amount (and checking it suggested the first amount back, a loop).
 // Fixture B: 2.0 ZEC went into Sapling once and Ironwood 20 times; 2.1 ZEC into Sapling 15 times and Ironwood once; 1.95 ZEC
 // into both 12 times.
@@ -432,7 +432,7 @@ fn under_any_a_suggestion_is_scored_the_way_the_check_scores_that_amount() {
     assert!(on_sample > 0, "the sample gave no suggestion to compare");
 }
 
-// research/46 F6: nothing has been able to enter Orchard since NU6.3 (ZIP 258), so an Orchard crowd of zero says nothing about an
+// NOTES S9d F6: nothing has been able to enter Orchard since NU6.3 (ZIP 258), so an Orchard crowd of zero says nothing about an
 // Orchard note (shielded before the window); a plain NO MATCH did not tell the user that.
 #[test]
 fn an_empty_orchard_crowd_says_why_and_how_to_reach_further_back() {
@@ -612,7 +612,7 @@ fn report_is_self_contained_and_shows_the_data_window() {
     }
 }
 
-/// research/46 F6: an unshield out of Orchard is NO MATCH by construction when the data holds no entry into Orchard (none can arrive
+/// NOTES S9d F6: an unshield out of Orchard is NO MATCH by construction when the data holds no entry into Orchard (none can arrive
 /// since NU6.3, ZIP 258). The report counts them apart instead of letting them pass for unshields nobody could link.
 #[test]
 fn report_counts_the_no_match_unshields_out_of_an_orchard_nothing_can_enter() {
@@ -641,7 +641,7 @@ fn report_counts_the_no_match_unshields_out_of_an_orchard_nothing_can_enter() {
     assert!(!html.contains("left Orchard"), "{html}");
 }
 
-/// research/46 F8: serde's position is inside the one line it was given, so a damaged line 4 of the file used to be reported as "line 1".
+/// NOTES S9d F8: serde's position is inside the one line it was given, so a damaged line 4 of the file used to be reported as "line 1".
 /// The blank line is there to show that the number is the file's line, not the count of events.
 #[test]
 fn a_damaged_event_line_is_reported_with_its_line_number_in_the_file() {
@@ -805,7 +805,7 @@ fn the_amount_typed_is_never_printed_back() {
     }
 }
 
-// research/46 F1: under `--pool any` GREEN outranks NO MATCH, so a pool with no entry never becomes the verdict and its caveat
+// NOTES S9d F1: under `--pool any` GREEN outranks NO MATCH, so a pool with no entry never becomes the verdict and its caveat
 // never showed (a user whose own shield landed after the last block saw GREEN and nothing else). The line now follows every pool
 // shown. Orchard is left out: nothing can enter it from NU6.3 on (ZIP 258), so later blocks cannot change its crowd.
 #[test]

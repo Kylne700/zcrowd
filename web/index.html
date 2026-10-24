@@ -185,11 +185,11 @@ function check(mode, zat, p, pool = "any") {
 // not: nothing can enter it from NU6.3 on (ZIP 258), so later blocks cannot change its crowd.
 const restsOnMissing = (r, pool = "any") => (pool === "any" ? r.pools : [r]).some((o) => o.pool !== "orchard" && (o.verdict === "NO MATCH" || o.verdict === "RED"));
 
-// check.rs `orchard_empty` (research/46 F6): nothing can have entered Orchard since NU6.3 (ZIP 258), so when the sample holds no Orchard
+// check.rs `orchard_empty` (NOTES S9d F6): nothing can have entered Orchard since NU6.3 (ZIP 258), so when the sample holds no Orchard
 // entry at all inside the lookback window, an unshield out of Orchard was shielded before it and a NO MATCH for Orchard says nothing.
 // Said whenever Orchard is judged (pool Orchard, or Not sure), never for a shield.
 const orchardEmpty = (mode, pool, p) => mode === "unshield" && (pool === "any" || pool === "orchard") && !BY_POOL[1].some(([t]) => t <= p.now && t >= Math.max(p.now - p.lookback * DAY, 0));
-// check.rs `short_window`: the sample covers less time than the lookback (no slack: research/46 S4-1).
+// check.rs `short_window`: the sample covers less time than the lookback (no slack: NOTES S9d S4-1).
 const shortWindow = (p) => DATA.cov.last_t - DATA.cov.first_t < p.lookback * DAY;
 const ORCHARD_EMPTY = "Note: Orchard has no entries at all in the lookback window of this sample, and none can arrive since NU6.3 (ZIP 258). An Orchard note was shielded before the window, so NO MATCH for Orchard says nothing about it: use the command line tool (sync --days N, then check --lookback-days N) to reach back to your shield.";
 

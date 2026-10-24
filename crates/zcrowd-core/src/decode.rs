@@ -36,6 +36,12 @@ impl Skip {
     }
 }
 
+/// True for a skip label (as stored in the meta) whose transactions may have been a shield or an unshield:
+/// their amounts could not be trusted or read. The two others crossed nothing. An unknown label counts as hiding.
+pub fn hides_crossing(label: &str) -> bool {
+    !matches!(label, "no_transparent_part" | "no_net_crossing")
+}
+
 pub enum Decoded {
     Event(Event),
     Skip(Skip),

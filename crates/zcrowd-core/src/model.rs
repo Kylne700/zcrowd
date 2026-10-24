@@ -1,5 +1,8 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -96,6 +99,92 @@ impl Coverage {
     }
 }
 
+/// Version of the data files. 1 = written before the Ironwood pool (the meta has no `version`); 2 = all three pools.
+/// `check` and `report` refuse any other version: older data would be scored without Ironwood and give a false NO MATCH.
+pub const FORMAT_VERSION: u32 = 2;
+
+/// What `sync` writes next to the events (`<data>.meta.json`): the window they cover and what was left out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Meta {
+    pub version: u32,
+    #[serde(flatten)]
+    pub cov: Coverage,
+    /// Transactions that produced no event, by reason; `None` = not recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<BTreeMap<String, usize>>,
+}
+
+/// The meta next to `data`, or the reason it cannot be used. Nothing is guessed: a data file without a usable meta of
+/// this version is refused, so a crash or an upgrade can never leave a window that claims more than the events hold.
+pub fn read_meta(data: &Path) -> Result<Meta> {
+    let p = Coverage::path_for(data);
+    let bytes = match std::fs::read(&p) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            bail!("no coverage file next to the data (an interrupted sync?): run `zcrowd sync` again")
+        }
+        Err(e) => bail!("cannot read {}: {e}", p.display()),
+    };
+    match serde_json::from_slice::<Meta>(&bytes) {
+        Ok(m) if m.version == FORMAT_VERSION => Ok(m),
+        _ => bail!("data from another zcrowd version: run `zcrowd sync` again"),
+    }
+}
+
+/// The events and the meta of a data file, for `check` and `report`. The meta is read first so that data of another
+/// version is refused before any event is parsed.
+pub fn load(data: &Path) -> Result<(Vec<Event>, Meta)> {
+    if !data.exists() {
+        bail!("cannot read {} (run `zcrowd sync` first; check and report never fetch anything)", data.display());
+    }
+    let meta = read_meta(data)?;
+    let events = read_ndjson(data).with_context(|| format!("cannot read {}", data.display()))?;
+    Ok((events, meta))
+}
+
+/// Write the events and their meta so that a crash never leaves a meta that claims more than the events hold: both go
+/// to temp files that are synced, the old meta is removed, the events are renamed into place and the meta last. A crash
+/// in between leaves events with no meta, which `read_meta` refuses.
+pub fn save(data: &Path, events: &[Event], meta: &Meta) -> Result<()> {
+    save_with(data, events, meta, || Ok(()))
+}
+
+/// `save`, with `between` run after the events are in place and before the meta is (tests fail it to simulate a crash).
+pub fn save_with(data: &Path, events: &[Event], meta: &Meta, between: impl FnOnce() -> Result<()>) -> Result<()> {
+    let (mpath, dtmp) = (Coverage::path_for(data), data.with_extension("tmp"));
+    let mtmp = mpath.with_extension("tmp");
+    let mut w = std::io::BufWriter::new(std::fs::File::create(&dtmp)?);
+    for e in events {
+        writeln!(w, "{}", serde_json::to_string(e)?)?;
+    }
+    w.into_inner()?.sync_all()?;
+    let mut m = std::fs::File::create(&mtmp)?;
+    m.write_all(&serde_json::to_vec(meta)?)?;
+    m.sync_all()?;
+    match std::fs::remove_file(&mpath) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    std::fs::rename(&dtmp, data)?;
+    sync_dir(data);
+    between()?;
+    std::fs::rename(&mtmp, &mpath)?;
+    sync_dir(data);
+    Ok(())
+}
+
+/// Make a rename durable. shortcut: Unix only; on Windows a power cut right after a sync can still undo the last rename
+/// (a killed process cannot), upgrade when Windows becomes a supported target.
+fn sync_dir(file: &Path) {
+    #[cfg(unix)]
+    {
+        let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+}
+
 /// Days since 1970-01-01 to (year, month, day), proleptic Gregorian (Hinnant's algorithm).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
@@ -118,22 +207,23 @@ pub fn fmt_utc(t: u64) -> String {
 pub const ZAT_PER_ZEC: u64 = 100_000_000;
 
 /// Parse a decimal ZEC amount ("12.5") to zatoshi. Rejects negatives, zero, junk and more than 8 decimals.
+/// The errors never repeat the text: an amount typed privately must not come back out on stderr.
 pub fn parse_zec(s: &str) -> Result<u64> {
     let s = s.trim();
     let (int, frac) = s.split_once('.').unwrap_or((s, ""));
     let digits = |p: &str| p.chars().all(|c| c.is_ascii_digit());
     if int.is_empty() && frac.is_empty() || !digits(int) || !digits(frac) {
-        bail!("not a plain non-negative decimal amount: {s:?}");
+        bail!("not a plain non-negative decimal amount (digits and one dot, like 12.5)");
     }
     if frac.len() > 8 {
-        bail!("more than 8 decimal places: {s:?}");
+        bail!("more than 8 decimal places");
     }
     let i: u64 = if int.is_empty() { 0 } else { int.parse()? };
     let f: u64 = if frac.is_empty() { 0 } else { format!("{frac:0<8}").parse()? };
     let z = i.checked_mul(ZAT_PER_ZEC).and_then(|v| v.checked_add(f));
     match z {
         Some(z) if z > 0 && z <= 21_000_000 * ZAT_PER_ZEC => Ok(z),
-        _ => bail!("amount must be > 0 and <= 21000000 ZEC: {s:?}"),
+        _ => bail!("amount must be > 0 and <= 21000000 ZEC"),
     }
 }
 
@@ -154,19 +244,6 @@ pub fn read_ndjson(path: &std::path::Path) -> Result<Vec<Event>> {
 
 pub fn coinbase_tag(e: &Event) -> String {
     if e.coinbase { " (coinbase)".into() } else { String::new() }
-}
-
-pub fn read_coverage(data: &std::path::Path) -> Option<Coverage> {
-    serde_json::from_slice(&std::fs::read(Coverage::path_for(data)).ok()?).ok()
-}
-
-/// The sidecar coverage, or (flag true) a window estimated from the events when the sidecar is missing.
-pub fn coverage_of(data: &std::path::Path, events: &[Event]) -> Option<(Coverage, bool)> {
-    if let Some(c) = read_coverage(data) {
-        return Some((c, false));
-    }
-    let (f, l) = (events.iter().min_by_key(|e| e.h)?, events.iter().max_by_key(|e| e.h)?);
-    Some((Coverage { first_h: f.h, first_t: f.t, last_h: l.h, last_t: l.t }, true))
 }
 
 #[cfg(test)]
@@ -199,5 +276,16 @@ mod tests {
         assert_eq!(parse_zec("21000000").unwrap(), 21_000_000 * 100_000_000);
         assert_eq!(sig_decimals(parse_zec("1.0001").unwrap()), 4);
         assert_eq!(sig_decimals(parse_zec("1.23456789").unwrap()), 8);
+    }
+
+    /// An amount typed privately must not come back out in an error (stderr ends up in logs).
+    #[test]
+    fn parse_errors_never_repeat_the_text() {
+        for (bad, frag) in
+            [("1.2497x", "2497"), ("-3.14159", "14159"), ("1.123456789", "123456789"), ("98765432.1", "98765432"), ("abc", "abc")]
+        {
+            let e = parse_zec(bad).unwrap_err().to_string();
+            assert!(!e.is_empty() && !e.contains(frag), "{e}");
+        }
     }
 }

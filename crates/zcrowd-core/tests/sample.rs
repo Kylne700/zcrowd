@@ -3,12 +3,13 @@
 //! reproduced with Ironwood-only shields.
 use std::path::PathBuf;
 use zcrowd_core::crowd::{DEFAULT_FEE_ALLOWANCE, Params, Verdict, count, score, score_pools, worst};
-use zcrowd_core::model::{read_coverage, read_ndjson};
+use zcrowd_core::model::load;
 use zcrowd_core::{Confidence, Event, Kind, Pool};
 
 fn sample() -> (Vec<Event>, u64) {
     let p: PathBuf = [env!("CARGO_MANIFEST_DIR"), "../../fixtures/flows-sample.ndjson"].iter().collect();
-    (read_ndjson(&p).unwrap(), read_coverage(&p).unwrap().last_t)
+    let (events, meta) = load(&p).unwrap();
+    (events, meta.cov.last_t)
 }
 
 fn params(now: u64) -> Params {

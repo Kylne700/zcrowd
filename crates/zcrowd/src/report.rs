@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
 use zcrowd_core::crowd::{DAY, DEFAULT_FEE_ALLOWANCE, Params, Verdict, bounds, score};
-use zcrowd_core::model::{Confidence, Coverage, Event, coverage_of, fmt_utc, fmt_zec, read_ndjson};
+use zcrowd_core::model::{Confidence, Coverage, Event, fmt_utc, fmt_zec, load};
 use zcrowd_core::{Kind, Pool};
 
 const BUCKETS: [(&str, u64, u64); 7] = [
@@ -17,10 +17,9 @@ const BUCKETS: [(&str, u64, u64); 7] = [
 ];
 
 pub fn run(out: &Path, data: &Path) -> Result<()> {
-    let all = read_ndjson(data)?;
-    let cov = coverage_of(data, &all).map(|c| c.0);
+    let (all, meta) = load(data)?;
     let evs: Vec<Event> = all.into_iter().filter(|e| e.confidence == Confidence::High).collect();
-    std::fs::write(out, render(&evs, cov))?;
+    std::fs::write(out, render(&evs, meta.cov))?;
     println!("wrote {} ({} events)", out.display(), evs.len());
     Ok(())
 }
@@ -56,10 +55,8 @@ fn profile(evs: &[Event], last_t: u64) -> [usize; 4] {
     n
 }
 
-pub fn render(evs: &[Event], cov: Option<Coverage>) -> String {
-    let window = cov.map_or(String::new(), |c| {
-        format!(" Window: blocks {}-{} ({} to {}).", c.first_h, c.last_h, fmt_utc(c.first_t), fmt_utc(c.last_t))
-    });
+pub fn render(evs: &[Event], cov: Coverage) -> String {
+    let window = format!(" Window: blocks {}-{} ({} to {}).", cov.first_h, cov.last_h, fmt_utc(cov.first_t), fmt_utc(cov.last_t));
     // moves between shielded pools are neither shields nor unshields: counted in the headline, not in the tables
     let flows: Vec<&Event> = evs.iter().filter(|e| e.kind != Kind::Move).collect();
     let mut by_amt: HashMap<u64, (usize, usize)> = HashMap::new();
@@ -97,8 +94,7 @@ pub fn render(evs: &[Event], cov: Option<Coverage>) -> String {
         );
     }
     svg.push_str("<text x=\"20\" y=\"214\" font-size=\"11\">green = shields, red = unshields; amount in ZEC</text></svg>");
-    let last_t = cov.map_or_else(|| evs.iter().map(|e| e.t).max().unwrap_or(0), |c| c.last_t);
-    let first_t = cov.map_or_else(|| evs.iter().map(|e| e.t).min().unwrap_or(0), |c| c.first_t);
+    let (first_t, last_t) = (cov.first_t, cov.last_t);
     let prof = profile(evs, last_t);
     let total = prof.iter().sum::<usize>().max(1);
     let mut prof_rows = String::new();

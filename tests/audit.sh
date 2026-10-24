@@ -181,7 +181,8 @@ assert rows, "no events"
 assert all(set(r) <= allowed for r in rows), "unexpected keys"
 names = os.listdir(d + "/tx")
 assert names and all(re.fullmatch(r"[0-9a-f]{64}\.hex", n) for n in names), "cache files are not named by txid"
-assert sorted(os.listdir(d)) == ["flows.meta.json", "flows.ndjson", "tx"], "unexpected files"
+assert sorted(os.listdir(d)) == ["flows.lock", "flows.meta.json", "flows.ndjson", "tx"], "unexpected files"
+assert os.path.getsize(d + "/flows.lock") == 0, "the lock file holds data"
 PY
 ok "P7 flows file keys, cache file names and the directory listing contain only public chain fields"
 ok "P8 wrong txid dropped and counted, broken prevHash and gaps are errors (tests wrong_or_broken_transactions_are_dropped_counted_and_never_cached, broken_block_chain_is_an_error, block_chain_is_checked_across_request_chunks)"

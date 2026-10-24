@@ -17,20 +17,38 @@ fn line(kind: &str, zat: u64, i: u64, extra: &str) -> String {
     line_in(kind, "sapling", zat, i, extra)
 }
 
-fn data_file(name: &str, lines: &[String]) -> std::path::PathBuf {
+/// The meta file of a month of data ending at `T`, in the current format. `extra` is more JSON fields, e.g. `,"skipped":{}`.
+fn meta(extra: &str) -> String {
+    format!(
+        r#"{{"version":{},"first_h":3499000,"first_t":{},"last_h":3500100,"last_t":{T}{extra}}}"#,
+        zcrowd_core::model::FORMAT_VERSION,
+        T - 31 * 86_400
+    )
+}
+
+fn data_file_meta(name: &str, lines: &[String], meta: Option<&str>) -> std::path::PathBuf {
     let p = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&p, lines.join("\n") + "\n").unwrap();
-    std::fs::write(
-        p.with_extension("meta.json"),
-        format!(r#"{{"first_h":3499000,"first_t":{},"last_h":3500100,"last_t":{T}}}"#, T - 31 * 86_400),
-    )
-    .unwrap();
+    let mp = p.with_extension("meta.json");
+    match meta {
+        Some(m) => std::fs::write(mp, m).unwrap(),
+        None => drop(std::fs::remove_file(mp)),
+    }
     p
 }
 
+fn data_file(name: &str, lines: &[String]) -> std::path::PathBuf {
+    data_file_meta(name, lines, Some(&meta("")))
+}
+
 fn run(args: &[&str], stdin: Option<&str>) -> (bool, String, String) {
+    run_env(args, stdin, &[])
+}
+
+fn run_env(args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> (bool, String, String) {
     let mut c = Command::new(BIN);
-    c.args(args).stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    c.args(args).envs(env.iter().copied()).stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    c.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = c.spawn().unwrap();
     if let Some(s) = stdin {
         child.stdin.take().unwrap().write_all(s.as_bytes()).unwrap();
@@ -197,4 +215,91 @@ fn report_is_self_contained_and_shows_the_data_window() {
     for bad in ["src=", "href=", "url(", "http://", "https://", "@import", "<script"] {
         assert!(!html.contains(bad), "report contains {bad}");
     }
+}
+
+const OTHER_VERSION: &str = "data from another zcrowd version: run `zcrowd sync` again";
+
+// Data of another zcrowd (no version, or a different one) or cut off before its meta was written is never trusted.
+#[test]
+fn check_and_report_refuse_data_without_this_format_version() {
+    let ev = [line("shield", 100_015_000, 1, "")];
+    let unversioned = r#"{"first_h":3499000,"first_t":1,"last_h":3500100,"last_t":2}"#;
+    let d = data_file_meta("cli-v1.ndjson", &ev, Some(unversioned));
+    let f = d.to_str().unwrap();
+    for args in [["check", "--unshield", "-", "--data", f], ["check", "--shield", "-", "--data", f]] {
+        let (ok, out, err) = run(&args, Some("1.0\n"));
+        assert!(!ok && out.is_empty() && err.contains(OTHER_VERSION), "{out} {err}");
+    }
+    let html = d.with_extension("html");
+    let _ = std::fs::remove_file(&html);
+    let (ok, _, err) = run(&["report", "--data", f, "--out", html.to_str().unwrap()], None);
+    assert!(!ok && err.contains(OTHER_VERSION) && !html.exists(), "{err}");
+    // events and no meta at all: an interrupted sync
+    let d = data_file_meta("cli-v2.ndjson", &ev, None);
+    let (ok, out, err) = run(&["check", "--unshield", "-", "--data", d.to_str().unwrap()], Some("1.0\n"));
+    assert!(!ok && out.is_empty() && err.contains("no coverage file") && err.contains("run `zcrowd sync` again"), "{out} {err}");
+}
+
+#[test]
+fn check_says_what_the_sync_skipped_and_whether_it_matters() {
+    let ev = [line("shield", 100_015_000, 1, "")];
+    let go = |name: &str, skipped: &str, json: bool| {
+        let d = data_file_meta(name, &ev, Some(&meta(skipped)));
+        let mut args = vec!["check", "--unshield", "-", "--pool", "sapling", "--data", d.to_str().unwrap()];
+        args.extend(json.then_some("--json"));
+        run(&args, Some("1.0\n"))
+    };
+    let (ok, out, _) = go("cli-s1.ndjson", r#","skipped":{"no_net_crossing":4,"no_transparent_part":8}"#, false);
+    let benign = "\nskipped: no_net_crossing 4, no_transparent_part 8 (not shields or unshields: nothing crossed the turnstile)\n";
+    assert!(ok && out.contains(benign), "{out}");
+    let (_, out, _) = go("cli-s2.ndjson", r#","skipped":{"conservation_fails":2,"no_net_crossing":4}"#, false);
+    let hole = "\nwarning: skipped conservation_fails 2: these could hide a shield or unshield and are missing from the crowd \
+                (also skipped, harmless: no_net_crossing 4)\n";
+    assert!(out.contains(hole), "{out}");
+    let (_, out, _) = go("cli-s3.ndjson", r#","skipped":{}"#, false);
+    assert!(out.contains("\nskipped: none\n"), "{out}");
+    // a meta that recorded nothing says nothing
+    let (_, out, _) = go("cli-s4.ndjson", "", false);
+    assert!(!out.contains("skipped"), "{out}");
+    let (ok, js, _) = go("cli-s1.ndjson", r#","skipped":{"no_net_crossing":4}"#, true);
+    let j: serde_json::Value = serde_json::from_str(&js).unwrap();
+    assert!(ok && j["skipped"]["no_net_crossing"] == 4, "{js}");
+}
+
+fn offline_sync(out: &std::path::Path) -> (bool, String, String) {
+    let fixtures = format!("{}/../../fixtures", env!("CARGO_MANIFEST_DIR"));
+    run_env(&["sync", "--days", "2", "--out", out.to_str().unwrap()], None, &[("ZCROWD_OFFLINE", "1"), ("ZCROWD_FIXTURES", &fixtures)])
+}
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let d = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+#[test]
+fn sync_replaces_data_of_another_version_and_stores_the_format_version_and_skipped_counts() {
+    let out = scratch("cli-sync-old").join("flows.ndjson");
+    std::fs::write(&out, line("shield", 100_000_000, 1, "") + "\n").unwrap();
+    std::fs::write(out.with_extension("meta.json"), r#"{"first_h":1,"first_t":1,"last_h":2,"last_t":2}"#).unwrap();
+    let (ok, stdout, err) = offline_sync(&out);
+    assert!(ok, "{stdout} {err}");
+    assert!(err.contains("has no usable coverage file of this zcrowd version; replacing it"), "{err}");
+    let (events, meta) = zcrowd_core::model::load(&out).unwrap();
+    assert_eq!((events.len(), meta.version), (3, zcrowd_core::model::FORMAT_VERSION));
+    assert!(meta.skipped.is_some());
+}
+
+#[test]
+fn a_second_sync_on_the_same_output_is_refused_while_the_first_holds_the_lock() {
+    let out = scratch("cli-sync-lock").join("flows.ndjson");
+    let held = std::fs::File::create(out.with_extension("lock")).unwrap();
+    held.lock().unwrap();
+    let (ok, _, err) = offline_sync(&out);
+    assert!(!ok && err.contains("another zcrowd sync is already writing"), "{err}");
+    assert!(!out.exists(), "a refused sync writes nothing");
+    drop(held);
+    let (ok, stdout, err) = offline_sync(&out);
+    assert!(ok && out.exists(), "{stdout} {err}");
 }

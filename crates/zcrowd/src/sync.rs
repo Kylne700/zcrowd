@@ -1,11 +1,11 @@
 use crate::Src;
-use anyhow::Result;
-use std::io::Write;
+use anyhow::{Result, bail};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 use zcrowd_core::Kind;
 use zcrowd_core::ingest::{RawCache, candidates, resolve};
-use zcrowd_core::model::{Coverage, Event, read_coverage, read_ndjson};
+use zcrowd_core::model::{FORMAT_VERSION, Meta, read_meta, read_ndjson, save};
 use zcrowd_core::source::BlockSource;
 
 const BLOCKS_PER_DAY: u64 = 1152; // 75 s blocks
@@ -22,6 +22,34 @@ pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurr
     }
 }
 
+/// One sync per output file at a time: a second one would read the same old data, and whichever finishes last would
+/// silently drop the other's blocks. The lock goes away when the process ends, even if it is killed.
+fn lock(out: &Path) -> Result<std::fs::File> {
+    if let Some(d) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d)?;
+    }
+    let p = out.with_extension("lock");
+    let f = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&p)?;
+    match f.try_lock() {
+        Ok(()) => Ok(f),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            bail!("another zcrowd sync is already writing {} (lock file {}): wait for it to finish", out.display(), p.display())
+        }
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+/// Skipped counts of an earlier sync plus this one's. shortcut: a re-synced overlap is counted twice, so the counts only
+/// grow until the data is replaced: they can over-report holes, never under-report; upgrade by storing them per block.
+/// An earlier sync that recorded none stays unrecorded.
+fn merge_skipped(old: Option<BTreeMap<String, usize>>, new: BTreeMap<String, usize>) -> Option<BTreeMap<String, usize>> {
+    let mut m = old?;
+    for (k, v) in new {
+        *m.entry(k).or_default() += v;
+    }
+    Some(m)
+}
+
 async fn go<S: BlockSource>(
     s: &S,
     days: u64,
@@ -31,6 +59,7 @@ async fn go<S: BlockSource>(
     end_height: Option<u64>,
 ) -> Result<()> {
     let t0 = Instant::now();
+    let _lock = if candidates_only { None } else { Some(lock(out)?) };
     let safe = s.tip().await?.saturating_sub(REORG_MARGIN);
     let end = match end_height {
         Some(h) if h > safe => {
@@ -60,36 +89,35 @@ async fn go<S: BlockSource>(
     }
     let Some(new_cov) = st.coverage else { anyhow::bail!("server returned no blocks") };
     let dir = out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir)?;
     let cache = RawCache(dir.join("tx"));
     let r = resolve(s, &cands, &cache, concurrency).await?;
 
     // Merge into any existing file: events inside the new range are replaced, older ones kept
     // when the ranges touch; a gap would make the coverage claim false, so then the old data is dropped.
-    let old: Vec<Event> = if out.exists() { read_ndjson(out)? } else { vec![] };
-    let old_cov = read_coverage(out);
-    let (mut events, cov) = match old_cov {
-        Some(oc) if oc.overlaps(&new_cov) => {
-            (old.into_iter().filter(|e| e.h < new_cov.first_h || e.h > new_cov.last_h).collect(), oc.union(new_cov))
-        }
+    // Data without a usable meta of this version (an older zcrowd, an interrupted sync) is never merged.
+    let new_skipped: BTreeMap<String, usize> = r.skipped.iter().map(|(k, v)| ((*k).to_string(), *v)).collect();
+    let old = read_meta(out).ok().zip(read_ndjson(out).ok());
+    let (mut events, cov, skipped) = match old {
+        Some((om, old_events)) if om.cov.overlaps(&new_cov) => (
+            old_events.into_iter().filter(|e| e.h < new_cov.first_h || e.h > new_cov.last_h).collect(),
+            om.cov.union(new_cov),
+            merge_skipped(om.skipped, new_skipped),
+        ),
         Some(_) => {
             eprintln!("note: new range does not touch the existing data; replacing it");
-            (vec![], new_cov)
+            (vec![], new_cov, Some(new_skipped))
         }
-        None => (vec![], new_cov),
+        None => {
+            if out.exists() {
+                eprintln!("note: the existing data has no usable coverage file of this zcrowd version; replacing it");
+            }
+            (vec![], new_cov, Some(new_skipped))
+        }
     };
     events.extend(r.events);
     events.sort_by(|a, b| (a.h, &a.txid).cmp(&(b.h, &b.txid)));
     events.dedup_by(|a, b| a.txid == b.txid);
-
-    let tmp = out.with_extension("tmp");
-    let mut w = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-    for e in &events {
-        writeln!(w, "{}", serde_json::to_string(e)?)?;
-    }
-    w.flush()?;
-    std::fs::rename(&tmp, out)?;
-    std::fs::write(Coverage::path_for(out), serde_json::to_vec(&cov)?)?;
+    save(out, &events, &Meta { version: FORMAT_VERSION, cov, skipped })?;
 
     let count = |k: Kind| events.iter().filter(|e| e.kind == k).count();
     let low = events.iter().filter(|e| e.confidence == zcrowd_core::Confidence::Low).count();
@@ -124,4 +152,21 @@ async fn go<S: BlockSource>(
         "tip: sync on a schedule, not right before you transact. The server learns nothing about your wallet, and over Tor (the default) it does not see your IP address either; with --no-tor it does."
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_skipped;
+    use std::collections::BTreeMap;
+
+    fn m(v: &[(&str, usize)]) -> BTreeMap<String, usize> {
+        v.iter().map(|(k, n)| (k.to_string(), *n)).collect()
+    }
+
+    #[test]
+    fn skipped_counts_add_up_and_unrecorded_stays_unrecorded() {
+        let sum = merge_skipped(Some(m(&[("a", 1), ("b", 2)])), m(&[("b", 3), ("c", 4)]));
+        assert_eq!(sum, Some(m(&[("a", 1), ("b", 5), ("c", 4)])));
+        assert_eq!(merge_skipped(None, m(&[("a", 1)])), None);
+    }
 }

@@ -1,11 +1,12 @@
 use anyhow::{Result, bail};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
 use zcrowd_core::Kind;
 use zcrowd_core::crowd::{AddrFinding, Crowd, DAY, Params, Verdict, address_check, score_pools, worse, worst};
-use zcrowd_core::decode::canonical_taddr;
-use zcrowd_core::model::{Event, coinbase_tag, coverage_of, fmt_utc, fmt_zec, parse_zec, read_ndjson};
+use zcrowd_core::decode::{canonical_taddr, hides_crossing};
+use zcrowd_core::model::{Event, coinbase_tag, fmt_utc, fmt_zec, load, parse_zec};
 use zcrowd_core::suggest::popular;
 
 /// Which shielded pool the funds are in (unshield) or will arrive in (shield). `any` scores all three and shows the worst.
@@ -84,12 +85,11 @@ pub fn run(a: Args) -> Result<()> {
         Some(t) => Some(canonical_taddr(&take(Some(t).filter(|t| t != "-"), "Destination address (not shown): ")?)?),
         None => None,
     };
-    let events = read_ndjson(&a.data)
-        .map_err(|e| anyhow::anyhow!("cannot read {} (run `zcrowd sync` first; check never fetches anything): {e}", a.data.display()))?;
+    let (events, meta) = load(&a.data)?;
     if events.is_empty() {
         bail!("{} has no events", a.data.display());
     }
-    let (cov, cov_derived) = coverage_of(&a.data, &events).expect("events is non-empty");
+    let cov = meta.cov;
     let now = cov.last_t;
     let p = Params { lookback_days: a.lookback_days, tol_zat: a.tol_zat, fee_allowance_zat: a.fee_allowance_zat, now };
     let crowds = score_pools(&events, user, zat, &p);
@@ -106,7 +106,7 @@ pub fn run(a: Args) -> Result<()> {
         let out = json!({
             "pool": c.pool.name(), "k": c.k, "weighted": c.weighted, "verdict": v(overall), "odd_amount": c.odd_amount,
             "pools": crowds.iter().map(|o| json!({"pool": o.pool.name(), "k": o.k, "weighted": o.weighted, "verdict": v(o.verdict)})).collect::<Vec<_>>(),
-            "other_pools_k": elsewhere,
+            "other_pools_k": elsewhere, "skipped": meta.skipped,
             "amount_verdict": v(c.verdict), "address_verdict": addr.as_ref().map(|f| v(addr_verdict(f))),
             "matches": c.matches.iter().map(|e| &e.txid).collect::<Vec<_>>(),
             "suggestions": sugg.iter().map(|s| json!({"zat": s.zat, "k": s.k, "weighted": s.weighted, "verdict": v(s.verdict)})).collect::<Vec<_>>(),
@@ -132,15 +132,10 @@ pub fn run(a: Args) -> Result<()> {
         a.lookback_days
     );
     let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-    println!(
-        "data: blocks {}..{} ({} .. {}), {} events{}",
-        cov.first_h,
-        cov.last_h,
-        fmt_utc(cov.first_t),
-        fmt_utc(cov.last_t),
-        events.len(),
-        if cov_derived { " (coverage file missing: window estimated from event times)" } else { "" }
-    );
+    println!("data: blocks {}..{} ({} .. {}), {} events", cov.first_h, cov.last_h, fmt_utc(cov.first_t), fmt_utc(cov.last_t), events.len());
+    if let Some(l) = skipped_line(&meta.skipped) {
+        println!("{l}");
+    }
     if wall.saturating_sub(cov.last_t) > 7200 {
         println!(
             "warning: the newest block in this data is {} old; shields since {} are not counted (run `zcrowd sync`)",
@@ -233,6 +228,23 @@ pub fn run(a: Args) -> Result<()> {
     }
     println!("{FOOTER}");
     Ok(())
+}
+
+/// One line about the transactions the sync could not turn into events; nothing when the data does not record them.
+fn skipped_line(skipped: &Option<BTreeMap<String, usize>>) -> Option<String> {
+    let s = skipped.as_ref()?;
+    let list = |hides: bool| {
+        s.iter().filter(|(k, n)| **n > 0 && hides_crossing(k) == hides).map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ")
+    };
+    let (hide, benign) = (list(true), list(false));
+    Some(match (hide.is_empty(), benign.is_empty()) {
+        (true, true) => "skipped: none".into(),
+        (true, false) => format!("skipped: {benign} (not shields or unshields: nothing crossed the turnstile)"),
+        (false, true) => format!("warning: skipped {hide}: these could hide a shield or unshield and are missing from the crowd"),
+        (false, false) => format!(
+            "warning: skipped {hide}: these could hide a shield or unshield and are missing from the crowd (also skipped, harmless: {benign})"
+        ),
+    })
 }
 
 fn print_match(e: &Event, now: u64) {

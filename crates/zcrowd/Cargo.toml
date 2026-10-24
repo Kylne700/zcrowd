@@ -1,0 +1,13 @@
+[package]
+name = "zcrowd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Check how big a crowd your Zcash unshield (or shield) amount hides in"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+zcrowd-core = { path = "../zcrowd-core" }

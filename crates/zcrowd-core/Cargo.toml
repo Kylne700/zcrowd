@@ -1,0 +1,19 @@
+[package]
+name = "zcrowd-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shield/unshield event extraction and amount-crowd scoring for Zcash"
+
+[dependencies]
+anyhow = "1"
+futures = "0.3"
+hex = "0.4"
+prost = "0.14.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time"] }
+tonic = { version = "0.14.6", features = ["tls-webpki-roots", "tls-ring", "transport"] }
+zcash_client_backend = { version = "0.25.0", features = ["lightwalletd-tonic", "lightwalletd-tonic-tls-webpki-roots", "sync"] }
+zcash_primitives = "0.31"
+zcash_protocol = "0.11.0"

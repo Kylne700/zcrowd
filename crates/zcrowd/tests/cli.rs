@@ -430,6 +430,26 @@ fn offline_sync(out: &std::path::Path) -> (bool, String, String) {
     run_env(&["sync", "--days", "2", "--out", out.to_str().unwrap()], None, &[("ZCROWD_OFFLINE", "1"), ("ZCROWD_FIXTURES", &fixtures)])
 }
 
+#[test]
+fn sync_reports_its_progress_on_stderr_with_heights_and_counts_only() {
+    let d = scratch("cli-progress");
+    let (ok, out, err) = offline_sync(&d.join("flows.ndjson"));
+    assert!(ok, "{err}");
+    // 2 days = 2304 blocks + 144 margin + the end block: two chunks of blocks, then the 3 transactions
+    for want in [
+        "sync: fetching blocks 3520182..3522630",
+        "sync: blocks 2000 of 2449 (81%)",
+        "sync: blocks 2449 of 2449 (100%)",
+        "sync: fetching up to 3 transactions",
+        "sync: fetched 3 of up to 3 transactions",
+    ] {
+        assert!(err.contains(want), "missing {want:?}:\n{err}");
+    }
+    assert!(!out.contains("sync:"), "progress belongs on stderr, stdout keeps its lines: {out}");
+    let long_hex = |l: &str| l.split(|c: char| !c.is_ascii_hexdigit()).any(|w| w.len() >= 20);
+    assert!(!err.lines().filter(|l| l.starts_with("sync:")).any(long_hex), "a progress line carries a transaction id:\n{err}");
+}
+
 fn scratch(name: &str) -> std::path::PathBuf {
     let d = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = std::fs::remove_dir_all(&d);

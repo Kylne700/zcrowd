@@ -2,11 +2,12 @@ use crate::Src;
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::Instant;
 use zcrowd_core::Kind;
 use zcrowd_core::ingest::{RawCache, all_pools_from, candidates, resolve};
 use zcrowd_core::model::{FORMAT_VERSION, Meta, read_meta, read_ndjson, save};
-use zcrowd_core::source::BlockSource;
+use zcrowd_core::source::{BlockSource, BlockSummary};
 
 const BLOCKS_PER_DAY: u64 = 1152; // 75 s blocks
 /// Stay this far behind the tip so a reorg cannot leave us with blocks that no longer exist.
@@ -56,6 +57,62 @@ fn merge_skipped(old: Option<BTreeMap<String, usize>>, new: BTreeMap<String, usi
     Some(m)
 }
 
+/// Counts finished work and says when a progress line is due: at every 5 percent and at the end, so any range
+/// prints about 20 lines.
+struct Meter {
+    total: AtomicU64,
+    done: AtomicU64,
+    last: AtomicU64,
+}
+
+impl Meter {
+    fn new(total: u64) -> Self {
+        Meter { total: AtomicU64::new(total), done: AtomicU64::new(0), last: AtomicU64::new(0) }
+    }
+
+    /// `n` more items are done. Some((done, total, percent)) when a line is due.
+    fn add(&self, n: u64) -> Option<(u64, u64, u64)> {
+        let done = self.done.fetch_add(n, Relaxed).saturating_add(n);
+        let total = self.total.load(Relaxed);
+        let pct = done.min(total).saturating_mul(100).checked_div(total)?;
+        let last = self.last.load(Relaxed);
+        (pct >= last + 5 || (pct == 100 && last < 100)).then(|| {
+            self.last.store(pct, Relaxed);
+            (done, total, pct)
+        })
+    }
+}
+
+/// The source of a sync, with progress on stderr: heights and counts only, nothing about the user.
+struct Progress<'a, S> {
+    inner: &'a S,
+    blocks: Meter,
+    txs: Meter,
+}
+
+impl<S: BlockSource> BlockSource for Progress<'_, S> {
+    async fn tip(&self) -> Result<u64> {
+        self.inner.tip().await
+    }
+    async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
+        let r = self.inner.blocks(start, end).await?;
+        if let Some((done, total, pct)) = self.blocks.add(end.saturating_sub(start).saturating_add(1)) {
+            eprintln!("sync: blocks {done} of {total} ({pct}%)");
+        }
+        Ok(r)
+    }
+    async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
+        let r = self.inner.raw_tx(txid).await?;
+        if let Some((done, total, _)) = self.txs.add(1) {
+            eprintln!("sync: fetched {done} of up to {total} transactions");
+        }
+        Ok(r)
+    }
+    fn strict_chain(&self) -> bool {
+        self.inner.strict_chain()
+    }
+}
+
 async fn go<S: BlockSource>(
     s: &S,
     days: u64,
@@ -76,7 +133,9 @@ async fn go<S: BlockSource>(
         None => safe,
     };
     let start = end.saturating_sub(days.saturating_mul(BLOCKS_PER_DAY).saturating_add(margin(days)));
-    let (cands, st) = candidates(s, start, end).await?;
+    let p = Progress { inner: s, blocks: Meter::new(end.saturating_sub(start).saturating_add(1)), txs: Meter::new(0) };
+    eprintln!("sync: fetching blocks {start}..{end}");
+    let (cands, st) = candidates(&p, start, end).await?;
     println!(
         "blocks={} txs={} shield_like={} (coinbase {}) unshield_like={} move_like={} range={}..{} secs={:.1}",
         st.blocks,
@@ -105,7 +164,9 @@ async fn go<S: BlockSource>(
     let Some(new_cov) = st.coverage else { anyhow::bail!("server returned no blocks") };
     let dir = out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let cache = RawCache(dir.join("tx"));
-    let r = resolve(s, &cands, &cache, concurrency).await?;
+    p.txs.total.store(cands.len() as u64, Relaxed);
+    eprintln!("sync: fetching up to {} transactions (the ones already saved are not fetched again)", cands.len());
+    let r = resolve(&p, &cands, &cache, concurrency).await?;
 
     // Merge into any existing file: events inside the new range are replaced, older ones kept
     // when the ranges touch; a gap would make the coverage claim false, so then the old data is dropped.
@@ -171,7 +232,7 @@ async fn go<S: BlockSource>(
 
 #[cfg(test)]
 mod tests {
-    use super::{margin, merge_skipped};
+    use super::{Meter, margin, merge_skipped};
     use std::collections::BTreeMap;
 
     fn m(v: &[(&str, usize)]) -> BTreeMap<String, usize> {
@@ -182,6 +243,26 @@ mod tests {
     fn the_margin_is_five_percent_with_a_floor_and_never_overflows() {
         assert_eq!((margin(1), margin(7), margin(30), margin(3650)), (144, 403, 1728, 210_240));
         assert_eq!(margin(u64::MAX), u64::MAX / 20);
+    }
+
+    #[test]
+    fn progress_prints_about_twenty_lines_for_any_size_and_ends_at_one_hundred() {
+        // blocks in chunks of 2000 (a day, a month, ten years), transactions one at a time, and tiny totals
+        for (total, step) in [(1_296u64, 2000u64), (36_288, 2000), (4_200_000, 2000), (70_000, 1), (3, 1), (1, 1)] {
+            let m = Meter::new(total);
+            let (mut lines, mut left) = (vec![], total);
+            while left > 0 {
+                let n = step.min(left);
+                lines.extend(m.add(n));
+                left -= n;
+            }
+            assert!(lines.len() <= 21, "{total}: {} lines", lines.len());
+            assert_eq!(lines.last(), Some(&(total, total, 100)), "{total}: the last line says 100%");
+            assert!(lines.windows(2).all(|w| w[0].2 < w[1].2), "{total}: percents only go up: {lines:?}");
+        }
+        let m = Meter::new(10);
+        assert_eq!((m.add(10), m.add(1)), (Some((10, 10, 100)), None), "100% is said once");
+        assert_eq!(Meter::new(0).add(1), None, "no total, nothing to say");
     }
 
     #[test]

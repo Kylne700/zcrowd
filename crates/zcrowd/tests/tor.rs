@@ -62,13 +62,14 @@ fn tor_failure_is_loud_and_never_goes_direct() {
 
     // Control: --no-tor is the one way to a direct connection, and the shim must see that attempt.
     let (err, net) = run("direct", &["--no-tor"]);
-    assert!(err.contains("warning: --no-tor"), "{err}");
+    assert!(err.contains("warning: --no-tor") && !err.contains("starting Tor"), "{err}");
     assert!(net.contains("getaddrinfo zcrowd-canary.invalid"), "the shim missed a direct connection attempt:\n{net}");
 
     // Default (Tor): fails loudly, names the flag, never looks up the server, and did try Tor relays.
     let tor_dir = d.join("tor-state");
     let (err, net) = run("tor", &["--tor-dir", tor_dir.to_str().unwrap()]);
     assert!(err.contains("did not bootstrap") && err.contains("--no-tor"), "{err}");
+    assert!(err.contains("starting Tor; the first run can take a minute"), "the wait for Tor goes unexplained:\n{err}");
     assert!(net.lines().any(|l| l.starts_with("connect ")), "the shim saw no connect at all (Tor was not even tried?):\n{net}");
     assert!(!net.contains("canary"), "the server name was looked up: a direct attempt\n{net}");
     assert!(!net.lines().any(|l| l.starts_with("getaddrinfo ")), "Tor mode resolved a name locally:\n{net}");

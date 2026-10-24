@@ -142,6 +142,7 @@ async fn open_source(servers: Vec<String>, no_tor: bool, tor_dir: Option<PathBuf
         )
     };
     let dir = tor_dir.map_or_else(default_tor_dir, Ok).map_err(stop)?;
+    eprintln!("starting Tor; the first run can take a minute");
     Lwd::connect(&list, Some(&dir)).await.map(Src::Net).map_err(stop)
 }
 

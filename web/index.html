@@ -185,6 +185,12 @@ function check(mode, zat, p, pool = "any") {
 // not: nothing can enter it from NU6.3 on (ZIP 258), so later blocks cannot change its crowd.
 const restsOnMissing = (r, pool = "any") => (pool === "any" ? r.pools : [r]).some((o) => o.pool !== "orchard" && (o.verdict === "NO MATCH" || o.verdict === "RED"));
 
+// check.rs `orchard_empty` (research/46 F6): nothing can have entered Orchard since NU6.3 (ZIP 258), so when the sample holds no Orchard
+// entry at all inside the lookback window, an unshield out of Orchard was shielded before it and a NO MATCH for Orchard says nothing.
+// Said whenever Orchard is judged (pool Orchard, or Not sure), never for a shield.
+const orchardEmpty = (mode, pool, p) => mode === "unshield" && (pool === "any" || pool === "orchard") && !BY_POOL[1].some(([t]) => t <= p.now && t >= Math.max(p.now - p.lookback * DAY, 0));
+const ORCHARD_EMPTY = "Note: Orchard has no entries at all in the lookback window of this sample, and none can arrive since NU6.3 (ZIP 258). An Orchard note was shielded before the window, so NO MATCH for Orchard says nothing about it: use the command line tool (sync --days N, then check --lookback-days N) to reach back to your shield.";
+
 // ---- page ----
 if (typeof document !== "undefined") {
   const $ = (id) => document.getElementById(id);
@@ -239,6 +245,7 @@ if (typeof document !== "undefined") {
     const notes = [];
     if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
     if (restsOnMissing(r, pool)) notes.push("Note: shields after " + fmtUtc(c.last_t) + " (last synced block) are not counted.");
+    if (orchardEmpty(mode, pool, p)) notes.push(ORCHARD_EMPTY);
     if (c.last_t - c.first_t < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: an entry of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
     put($("note"), notes.join(" "));
     $("matches").replaceChildren(); $("sugg").replaceChildren();

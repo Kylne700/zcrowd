@@ -186,11 +186,14 @@ async function privacy(browser, origin, url) {
   // but 162 entries into Ironwood. A pool without an entry is NO MATCH, which GREEN outranks, so the missing-shields line has
   // to follow every pool shown (research/46 F1): Sapling is NO MATCH for 1.0 and for 1.23456789 (Orchard never counts)
   const missing = `shields after ${LAST_UTC} (last synced block) are not counted`;
+  // The sample holds no Orchard entry at all (nothing can enter it since NU6.3, ZIP 258): when Orchard is judged, a NO MATCH for it says
+  // nothing about a note shielded before the window (research/46 F6)
+  const orchardEmpty = "Note: Orchard has no entries at all in the lookback window of this sample, and none can arrive since NU6.3 (ZIP 258). An Orchard note was shielded before the window, so NO MATCH for Orchard says nothing about it: use the command line tool (sync --days N, then check --lookback-days N) to reach back to your shield.";
   assert.equal(verdicts["1.0"].verdict, "GREEN");
-  assert.equal(verdicts["1.0"].note, `Note: ${missing}.`);
+  assert.equal(verdicts["1.0"].note, `Note: ${missing}. ${orchardEmpty}`);
   assert.equal(verdicts["1.23456789"].verdict, "AMBER");
   assert.match(verdicts["1.23456789"].note, /easy to recognise later/);
-  assert.ok(verdicts["1.23456789"].note.includes(missing), verdicts["1.23456789"].note);
+  assert.ok(verdicts["1.23456789"].note.includes(missing) && verdicts["1.23456789"].note.includes(orchardEmpty), verdicts["1.23456789"].note);
   await scan("AMBER");
   // the first suggestion promises what typing that amount shows (research/46 F2): crowd and verdict are the worst of the three pools
   const first = (await page.locator("#sugg li").first().innerText()).match(/^(\d+\.\d{8}) ZEC -> crowd (\d+) \(weighted (\d+\.\d), (GREEN|AMBER|RED)\)$/);
@@ -205,17 +208,20 @@ async function privacy(browser, origin, url) {
   assert.match(await page.locator("#crowd").innerText(), /^157 earlier shields and moves into sapling \(the worst of the three pools\) of about 1\.24970000 ZEC .* weighted 114\.5/);
   assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=157 weighted=114.5 -> GREEN", "pool orchard: k=0 weighted=0.0 -> NO MATCH", "pool ironwood: k=592 weighted=437.0 -> GREEN"]);
   assert.match(await page.locator("#pool-note").innerText(), /^592 entries of about this amount went into the other pools: linkable only through a visible pool move; not counted\./);
-  // only Orchard has no entry here, and no later block can add one (ZIP 258): no missing-shields line
+  // only Orchard has no entry here, and no later block can add one (ZIP 258): no missing-shields line, but the Orchard note
   assert.doesNotMatch(await page.locator("#note").innerText(), /shields after/);
+  assert.equal((await page.locator("#note").innerText()).trim(), orchardEmpty);
   const poolPick = {};
   for (const pool of ["ironwood", "orchard", "sapling"]) {
     await page.locator("#pool").selectOption(pool);
-    poolPick[pool] = { verdict: (await page.locator("#verdict").innerText()).trim(), crowd: (await page.locator("#crowd").innerText()).trim(), lines: await page.locator("#pools li").count() };
+    poolPick[pool] = { verdict: (await page.locator("#verdict").innerText()).trim(), crowd: (await page.locator("#crowd").innerText()).trim(), lines: await page.locator("#pools li").count(), note: await page.locator("#note").innerText() };
     assert.equal(poolPick[pool].lines, 0, "one pool chosen: no per-pool list");
   }
   assert.equal(poolPick.ironwood.verdict, "GREEN");
   assert.match(poolPick.ironwood.crowd, /^592 earlier shields and moves into ironwood of about 1\.24970000 ZEC .* weighted 437\.0/);
   assert.equal(poolPick.orchard.verdict, "NO MATCH");
+  assert.ok(poolPick.orchard.note.includes(orchardEmpty), "pool Orchard: no note about the empty Orchard crowd");
+  assert.ok(!poolPick.sapling.note.includes("Orchard has no entries") && !poolPick.ironwood.note.includes("Orchard has no entries"), "the Orchard note belongs to Orchard alone");
   assert.equal(poolPick.sapling.verdict, "GREEN");
   assert.match(poolPick.sapling.crowd, /^157 earlier shields and moves into sapling of about /);
   await page.locator("#pool").selectOption("any");
@@ -244,6 +250,7 @@ async function privacy(browser, origin, url) {
   assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=88 weighted=64.5 -> GREEN", "pool ironwood: k=8 weighted=6.0 -> AMBER"]);
   assert.match(await page.locator("#crowd").innerText(), /^8 other shields and moves into ironwood \(the worst of the two pools\) of about 1\.24985000 ZEC /);
   assert.match(await page.locator("#pool option[value=any]").innerText(), /^Not sure \(check Sapling and Ironwood, show the worse\)$/);
+  assert.doesNotMatch(await page.locator("#note").innerText(), /Orchard has no entries/, "a shield never goes into Orchard: no note about it");
   await scan("shield AMBER");
   await page.locator("#pool").selectOption("orchard");
   assert.match(await page.locator("#msg").innerText(), /^A shield cannot go into Orchard: from NU6\.3 on no value may enter that pool \(ZIP 258\)\./);

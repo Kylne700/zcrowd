@@ -26,8 +26,10 @@ pub fn run(out: &Path, data: &Path) -> Result<()> {
 
 /// How the unshields of the last 14 days looked to an observer: each scored against the 14 days of entries (shields and
 /// moves) into its own pool before it.
-/// Counts in the order NO MATCH, RED, AMBER, GREEN.
-fn profile(evs: &[Event], last_t: u64) -> [usize; 4] {
+/// Counts in the order NO MATCH, RED, AMBER, GREEN, and how many of the NO MATCH left Orchard when the data holds no entry into
+/// Orchard at all (0 otherwise): nothing has been able to enter it since NU6.3 (ZIP 258), so they have nothing to match whatever
+/// their amount (research/46 F6).
+fn profile(evs: &[Event], last_t: u64) -> ([usize; 4], usize) {
     // Entries per pool sorted by amount: an unshield then scores only the entries of about its own amount, so a month of
     // data takes seconds instead of minutes. Same result as scoring against every event.
     let mut by_pool: [Vec<Event>; 3] = Default::default();
@@ -37,7 +39,8 @@ fn profile(evs: &[Event], last_t: u64) -> [usize; 4] {
         }
     }
     by_pool.iter_mut().for_each(|v| v.sort_by_key(|e| e.zat));
-    let mut n = [0; 4];
+    let orchard_has_entries = evs.iter().any(|e| e.pool == Pool::Orchard && matches!(e.kind, Kind::Shield | Kind::Move));
+    let (mut n, mut from_orchard) = ([0; 4], 0);
     for e in evs.iter().filter(|e| e.kind == Kind::Unshield && e.t + 14 * DAY >= last_t) {
         let p = Params { lookback_days: 14, tol_zat: 0, fee_allowance_zat: DEFAULT_FEE_ALLOWANCE, now: e.t };
         // the recipient gets the pool amount minus the fee (the fee is unknown for a few: their pool amount is used)
@@ -45,14 +48,16 @@ fn profile(evs: &[Event], last_t: u64) -> [usize; 4] {
         let (lo, hi) = bounds(Kind::Unshield, x, &p);
         let all: &[Event] = Pool::SINGLE.iter().position(|q| *q == e.pool).map_or(&[], |i| &by_pool[i]);
         let near = &all[all.partition_point(|c| c.zat < lo)..all.partition_point(|c| c.zat <= hi)];
-        n[match score(near, Kind::Unshield, e.pool, x, &p).verdict {
+        let verdict = score(near, Kind::Unshield, e.pool, x, &p).verdict;
+        from_orchard += usize::from(verdict == Verdict::NoMatch && e.pool == Pool::Orchard && !orchard_has_entries);
+        n[match verdict {
             Verdict::NoMatch => 0,
             Verdict::Red => 1,
             Verdict::Amber => 2,
             Verdict::Green => 3,
         }] += 1;
     }
-    n
+    (n, from_orchard)
 }
 
 pub fn render(evs: &[Event], cov: Coverage) -> String {
@@ -95,7 +100,7 @@ pub fn render(evs: &[Event], cov: Coverage) -> String {
     }
     svg.push_str("<text x=\"20\" y=\"214\" font-size=\"11\">green = shields, red = unshields; amount in ZEC</text></svg>");
     let (first_t, last_t) = (cov.first_t, cov.last_t);
-    let prof = profile(evs, last_t);
+    let (prof, from_orchard) = profile(evs, last_t);
     let total = prof.iter().sum::<usize>().max(1);
     let mut prof_rows = String::new();
     for (name, c) in ["NO MATCH", "RED", "AMBER", "GREEN"].iter().zip(prof) {
@@ -105,6 +110,13 @@ pub fn render(evs: &[Event], cov: Coverage) -> String {
         "<p><b>This data covers less than 28 days, so the earlier shields of many unshields are missing and NO MATCH is overstated.</b></p>"
     } else {
         ""
+    };
+    let orchard = if from_orchard > 0 {
+        format!(
+            "<p>{from_orchard} of the NO MATCH unshields left Orchard. This data holds no shield or move into Orchard, and none can arrive since NU6.3 (ZIP 258): they have no entry to match, whatever their amount, so their NO MATCH says nothing about them.</p>"
+        )
+    } else {
+        String::new()
     };
     let mut top: Vec<_> = by_amt.iter().collect();
     top.sort_by(|a, b| (b.1.0 + b.1.1).cmp(&(a.1.0 + a.1.1)).then(a.0.cmp(b.0)));
@@ -120,7 +132,7 @@ pub fn render(evs: &[Event], cov: Coverage) -> String {
 <p><b>{uniq}</b> events ({:.1}%) have an amount that no other event shares: these are the easiest to link.</p>\
 <h2>Unshields of the last 14 days as an observer would score them</h2>\
 <p>Each unshield (amount the recipient got) against the shields and moves into its own pool in the 14 days before it, fee allowance 50000 zat. RED: exactly one earlier entry of about that amount, so an observer has one candidate. GREEN: ten or more.</p>{short}\
-<table><tr><th>verdict</th><th>unshields</th><th>share</th></tr>{prof_rows}</table>\
+<table><tr><th>verdict</th><th>unshields</th><th>share</th></tr>{prof_rows}</table>{orchard}\
 <h2>Events by amount</h2>{svg}\
 <h2>Most common exact amounts</h2><table><tr><th>ZEC</th><th>shields</th><th>unshields</th></tr>{rows}</table>\
 <p>Heuristic covering amount only. A large crowd is not a privacy guarantee.</p></body></html>\n",

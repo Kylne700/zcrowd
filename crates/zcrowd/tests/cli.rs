@@ -405,6 +405,54 @@ fn under_any_a_suggestion_is_scored_the_way_the_check_scores_that_amount() {
     assert!(on_sample > 0, "the sample gave no suggestion to compare");
 }
 
+// research/46 F6: nothing has been able to enter Orchard since NU6.3 (ZIP 258), so an Orchard crowd of zero says nothing about an
+// Orchard note (shielded before the window); a plain NO MATCH did not tell the user that.
+#[test]
+fn an_empty_orchard_crowd_says_why_and_how_to_reach_further_back() {
+    let note = "note: orchard has no entries at all in this window, and none can arrive since NU6.3 (ZIP 258).";
+    // Sapling and Ironwood are busy; Orchard has one shield, 20 days old
+    let mut v: Vec<String> = (1..=12).map(|i| line_in("shield", "sapling", 100_000_000, i, "")).collect();
+    v.extend((13..=15).map(|i| line_in("shield", "ironwood", 100_000_000, i, "")));
+    let old_orchard =
+        line_in("shield", "orchard", 100_000_000, 16, "").replace(&format!("\"t\":{}", T - 1600), &format!("\"t\":{}", T - 20 * 86_400));
+    assert!(old_orchard.contains(&format!("\"t\":{}", T - 20 * 86_400)), "{old_orchard}");
+    let with_old = data_file("cli-orchard-old.ndjson", &[v.clone(), vec![old_orchard]].concat());
+    let without = data_file("cli-orchard-none.ndjson", &v);
+    let go = |f: &std::path::Path, args: &[&str]| -> (String, serde_json::Value) {
+        let base = ["check", "--unshield", "-", "--data", f.to_str().unwrap()];
+        let (ok, out, err) = run(&[&base[..], args].concat(), Some("1\n"));
+        assert!(ok, "{err}");
+        contract(&out);
+        let (ok, js, err) = run(&[&base[..], args, &["--json"]].concat(), Some("1\n"));
+        assert!(ok, "{err}");
+        (out, serde_json::from_str(&js).unwrap())
+    };
+    let said = |out: &str, j: &serde_json::Value| -> (usize, bool) {
+        (
+            out.lines().filter(|l| l.starts_with(note)).count(),
+            j["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().starts_with(note)),
+        )
+    };
+    // no Orchard entry at all: once under the default, with the way out, and the same line in the JSON notes
+    let (out, j) = go(&without, &[]);
+    assert_eq!(said(&out, &j), (1, true), "{out}");
+    assert!(out.contains("sync more days (sync --days N) and check with --lookback-days N to reach back to your shield"), "{out}");
+    // the Orchard user's own answer carries it too, and so does the one for an Orchard-only question
+    let (out, j) = go(&without, &["--pool", "orchard"]);
+    assert_eq!(said(&out, &j), (1, true), "{out}");
+    assert!(out.contains("verdict: NO MATCH"), "{out}");
+    // other pools are not Orchard: no line; a shield cannot go into Orchard: no line
+    let (out, j) = go(&without, &["--pool", "sapling"]);
+    assert_eq!(said(&out, &j), (0, false), "{out}");
+    let (ok, out, err) = run(&["check", "--shield", "-", "--data", without.to_str().unwrap()], Some("1\n"));
+    assert!(ok && !out.contains("orchard"), "{out}{err}");
+    // an Orchard entry inside the window: Orchard does have a crowd to look at, no line; shorter than its age: the line is back
+    let (out, j) = go(&with_old, &[]);
+    assert_eq!(said(&out, &j), (0, false), "{out}");
+    let (out, j) = go(&with_old, &["--lookback-days", "7"]);
+    assert_eq!(said(&out, &j), (1, true), "{out}");
+}
+
 // The process cuts its own network. A listener on loopback is reachable from this process but not from the probe once it
 // is in the sandbox. On Linux the seccomp layer answers first (the socket itself is refused: "Operation not permitted"; the
 // empty namespace alone would say "Network is unreachable"); on macOS the no-network profile. Windows has no sandbox.
@@ -535,6 +583,35 @@ fn report_is_self_contained_and_shows_the_data_window() {
     for bad in ["src=", "href=", "url(", "http://", "https://", "@import", "<script"] {
         assert!(!html.contains(bad), "report contains {bad}");
     }
+}
+
+/// research/46 F6: an unshield out of Orchard is NO MATCH by construction when the data holds no entry into Orchard (none can arrive
+/// since NU6.3, ZIP 258). The report counts them apart instead of letting them pass for unshields nobody could link.
+#[test]
+fn report_counts_the_no_match_unshields_out_of_an_orchard_nothing_can_enter() {
+    let report = |name: &str, lines: &[String]| {
+        let d = data_file(name, lines);
+        let out = d.with_extension("html");
+        let (ok, _, err) = run(&["report", "--data", d.to_str().unwrap(), "--out", out.to_str().unwrap()], None);
+        assert!(ok, "{err}");
+        std::fs::read_to_string(&out).unwrap()
+    };
+    // nothing entered any pool: three NO MATCH, two of them out of Orchard
+    let mut v = vec![
+        line_in("unshield", "orchard", 100_000_000, 1, ""),
+        line_in("unshield", "orchard", 200_000_000, 2, ""),
+        line("unshield", 300_000_000, 3, ""),
+    ];
+    let html = report("cli-report-orchard-empty.ndjson", &v);
+    assert!(html.contains("<tr><td>NO MATCH</td><td>3</td>"), "{html}");
+    assert!(html.contains("<p>2 of the NO MATCH unshields left Orchard. This data holds no shield or move into Orchard"), "{html}");
+    // a move into Orchard anywhere in the data: its NO MATCH is a real one, so no such sentence
+    v.push(line_in("move", "orchard", 400_000_000, 4, ""));
+    let html = report("cli-report-orchard-entry.ndjson", &v);
+    assert!(html.contains("<tr><td>NO MATCH</td><td>3</td>") && !html.contains("left Orchard"), "{html}");
+    // no unshield out of Orchard: nothing to say either
+    let html = report("cli-report-orchard-none.ndjson", &[line("unshield", 300_000_000, 3, "")]);
+    assert!(!html.contains("left Orchard"), "{html}");
 }
 
 const OTHER_VERSION: &str = "data from another zcrowd version: run `zcrowd sync` again";

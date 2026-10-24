@@ -114,6 +114,13 @@ pub fn pools_for(user: Kind) -> &'static [Pool] {
     }
 }
 
+/// Does `pool` have any entry at all inside the lookback window, whatever its amount? (Asking `in_scope` for the entry's own
+/// amount keeps this on the one definition of "entry".)
+pub fn has_entries(events: &[Event], pool: Pool, p: &Params) -> bool {
+    let exact = Params { tol_zat: 0, fee_allowance_zat: 0, ..*p };
+    events.iter().any(|e| in_scope(e, Kind::Unshield, pool, e.zat, &exact))
+}
+
 /// One crowd per pool of `pools_for(user)`, in `Pool::SINGLE` order.
 pub fn score_pools(events: &[Event], user: Kind, zat: u64, p: &Params) -> Vec<Crowd> {
     pools_for(user).iter().map(|&pool| score(events, user, pool, zat, p)).collect()
@@ -218,6 +225,24 @@ mod tests {
         // window edges: X + 50000 matches, X + 50001 does not, X - 1 does not
         let edge = |z| score(&[ev(Kind::Shield, z, NOW - 5)], Kind::Unshield, X, &p(0)).k;
         assert_eq!((edge(X + 50_000), edge(X + 50_001), edge(X - 1), edge(X)), (1, 0, 0, 1));
+    }
+
+    // research/46 F6: "no entry at all in the window" is what makes an Orchard NO MATCH say nothing; the same window and the same
+    // definition of an entry as the crowd (shield or move, High confidence, inside the lookback), whatever the amount.
+    #[test]
+    fn has_entries_looks_at_the_window_the_kind_and_the_confidence_not_the_amount() {
+        let orchard = |kind, zat, t| Event { pool: Pool::Orchard, ..ev(kind, zat, t) };
+        let low = Event { confidence: Confidence::Low, ..orchard(Kind::Shield, X, NOW - 10) };
+        let mut evs =
+            vec![orchard(Kind::Unshield, X, NOW - 10), low, orchard(Kind::Shield, X, NOW - 40 * DAY), orchard(Kind::Shield, X, NOW + 5)];
+        assert!(!has_entries(&evs, Pool::Orchard, &p(0)), "an unshield, a Low-confidence one, an old one and a future one are no entries");
+        evs.push(orchard(Kind::Move, 7 * X, NOW - 20 * DAY));
+        assert!(has_entries(&evs, Pool::Orchard, &p(0)), "a move of any amount inside the window is an entry");
+        assert!(!has_entries(&evs, Pool::Orchard, &Params { lookback_days: 7, ..p(0) }), "shorter than its age: outside the window");
+        assert!(
+            !has_entries(&evs, Pool::Sapling, &p(0)) && !has_entries(&evs, Pool::Ironwood, &p(0)),
+            "another pool's entries are not this pool's"
+        );
     }
 
     #[test]

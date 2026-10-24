@@ -6,15 +6,8 @@ use serde::{Deserialize, Serialize};
 pub enum Kind {
     Shield,
     Unshield,
-}
-
-impl Kind {
-    pub fn opposite(self) -> Kind {
-        match self {
-            Kind::Shield => Kind::Unshield,
-            Kind::Unshield => Kind::Shield,
-        }
-    }
+    /// Value moves from one shielded pool into another with no transparent output (spec 41 A11).
+    Move,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +15,9 @@ impl Kind {
 pub enum Pool {
     Sapling,
     Orchard,
+    /// The third shielded pool of v6 transactions (zcash_protocol 0.11 `ShieldedPool::Ironwood`).
+    Ironwood,
+    /// More than one shielded pool has a nonzero value balance.
     Mixed,
 }
 
@@ -32,8 +28,23 @@ pub enum Confidence {
     Low,
 }
 
-/// One public turnstile crossing. `zat` is the net amount that crossed the turnstile
-/// (shield: value entering the shielded pools; unshield: value leaving them, fee included).
+impl Pool {
+    /// The three real pools, in the order `check` prints them.
+    pub const SINGLE: [Pool; 3] = [Pool::Sapling, Pool::Orchard, Pool::Ironwood];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Pool::Sapling => "sapling",
+            Pool::Orchard => "orchard",
+            Pool::Ironwood => "ironwood",
+            Pool::Mixed => "mixed",
+        }
+    }
+}
+
+/// One public turnstile crossing or pool move (spec 41 A11). `zat` is the value that arrives in `pool`
+/// (shield and move) or that leaves it, fee included (unshield). `pool` is Mixed only for low-confidence
+/// multi-pool transactions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub h: u64,

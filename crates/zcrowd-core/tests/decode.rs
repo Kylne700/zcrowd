@@ -1,4 +1,4 @@
-use zcrowd_core::decode::{Decoded, Skip, event_from_tx, input_address};
+use zcrowd_core::decode::{Decoded, event_from_tx, input_address};
 use zcrowd_core::{Confidence, Event, Kind, Pool};
 
 fn raw(txid: &str) -> Vec<u8> {
@@ -41,10 +41,62 @@ fn decode_shield_with_transparent_change() {
     assert_eq!((e.kind, e.zat, e.n_tin, e.n_tout, e.confidence), (Kind::Shield, 308_000_000, 2, 1, Confidence::High));
 }
 
+// A real Sapling -> Ironwood move with no transparent part: Sapling pays out 100_020_000, Ironwood takes 100_000_000,
+// fee 20_000 (spec 41 A11, test E13). Decoded from the raw bytes only; no explorer was consulted for this one.
+// The old decoder produced no event for a transaction without a transparent bundle.
 #[test]
-fn decode_shielded_only_is_ignored() {
-    let d = event_from_tx(&raw("e62e321fb4d933b1928402942981a7efbd388830875fc3d8734eedcd39e0da1f"), 3520949, 1).unwrap();
-    assert!(matches!(d, Decoded::Skip(Skip::NoTransparentPart)));
+fn decode_move_into_ironwood() {
+    let e = ev("e62e321fb4d933b1928402942981a7efbd388830875fc3d8734eedcd39e0da1f", 3520949);
+    assert_eq!((e.kind, e.zat, e.pool, e.fee_zat, e.confidence), (Kind::Move, 100_000_000, Pool::Ironwood, Some(20_000), Confidence::High));
+    assert!((e.n_tin, e.n_tout) == (0, 0) && e.src.is_empty() && e.dst.is_empty());
+}
+
+// E10: the four events that research/44 found wrong, and E14, decoded from the raw bytes (fixtures/raw).
+// Per-pool balances and fees were read on 2026-10-24 between 14:35 and 14:48 UTC from two explorers: Cipherscan
+// (api.mainnet.cipherscan.app/api/tx/<txid>, primary) and zcashexplorer.app. The old decoder saw Sapling and Orchard
+// only, so it reported the Orchard share alone (or nothing) and a fee of 0.
+fn low_multi_pool_unshield(txid: &str, h: u64, zat: u64, fee: u64) {
+    let e = ev(txid, h);
+    assert_eq!((e.kind, e.zat, e.pool, e.fee_zat, e.confidence), (Kind::Unshield, zat, Pool::Mixed, Some(fee), Confidence::Low));
+    assert_eq!((e.n_tin, e.n_tout), (0, 1));
+    assert_eq!(e.dst.len(), 1);
+}
+
+// #1: Sapling 6_700 + Orchard 5_000 + Ironwood 694_575_145 leave, one output, explorer fee 35_000.
+#[test]
+fn decode_three_pool_unshield_1() {
+    low_multi_pool_unshield("91c68e50d342033e69241957b1ebafabcc56f4e0f3db0464e983852120754c12", 3511683, 694_586_845, 35_000);
+}
+
+// #6: Sapling 30_000 + Orchard 7_125_000 + Ironwood 722_880_000 leave, one output, explorer fee 35_000.
+#[test]
+fn decode_three_pool_unshield_6() {
+    low_multi_pool_unshield("c292feb1072f3b78ef140f88945b561e5f4d105e5cbb4c9d9556643ce85aa4f6", 3521500, 730_035_000, 35_000);
+}
+
+// #9: Orchard 3_494_678 + Ironwood 530_322 leave, one output, explorer fee 25_000.
+#[test]
+fn decode_two_pool_unshield_9() {
+    low_multi_pool_unshield("ce7e196a8d6ab7d855f8eac4d9d53a8c207f42e9f6ba8d1d66e7587e40eaa751", 3521263, 4_025_000, 25_000);
+}
+
+// E14 (spec 41 A11): Orchard 225_000 + Ironwood 134_000_000 leave, t_out 134_200_000, so the fee is 25_000. The old
+// decoder reported an Orchard unshield of 225_000 with fee 0.
+#[test]
+fn decode_two_pool_unshield_e14() {
+    low_multi_pool_unshield("a57f5cd4302647c2649dc182f2c9c98e5ff252a95f235ddf39ba49ecb22cb448", 3494573, 134_225_000, 25_000);
+}
+
+// #7: one transparent input of 12_297_904, no transparent output, explorer fee 25_000. Ironwood takes 12_319_850 and
+// Orchard pays out 46_946. The explorer shows the net crossing (12_272_904 = 12_297_904 - 25_000). Spec 41 A11 counts
+// the value that arrives in the pool: a High shield into Ironwood of 12_319_850, with no fee (the input is not in the
+// transaction), which is what a later unshield from Ironwood would have to match.
+#[test]
+fn decode_shield_into_ironwood_while_orchard_pays_in_7() {
+    let e = ev("48ca0a26177cd32bab994e720c26b8393f0c86cde10da2ab65ff944fb67b3799", 3516743);
+    assert_eq!((e.kind, e.zat, e.pool, e.fee_zat, e.confidence), (Kind::Shield, 12_319_850, Pool::Ironwood, None, Confidence::High));
+    assert_eq!((e.n_tin, e.n_tout), (1, 0));
+    assert_eq!(e.src, ["t1R7MByh2iEMaaXXnJw7mjpWMADy6BMm1pQ"]);
 }
 
 #[test]

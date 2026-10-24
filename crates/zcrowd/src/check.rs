@@ -86,7 +86,7 @@ pub fn run(a: Args) -> Result<()> {
 
     let (what, other) = match user {
         Kind::Unshield => ("unshield (recipient gets this amount)", "earlier shields of about this amount, allowing for the fee"),
-        Kind::Shield => ("shield", "other shields of about this amount, the decoys for a later unshield of the whole note"),
+        Kind::Shield | Kind::Move => ("shield", "other shields of about this amount, the decoys for a later unshield of the whole note"),
     };
     println!(
         "check: {what} {} ZEC; fee allowance {} zat, tolerance {} zat, lookback {} days",

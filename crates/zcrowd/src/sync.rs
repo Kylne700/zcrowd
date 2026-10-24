@@ -44,12 +44,13 @@ async fn go<S: BlockSource>(
     let start = end.saturating_sub(days * BLOCKS_PER_DAY + 144);
     let (cands, st) = candidates(s, start, end).await?;
     println!(
-        "blocks={} txs={} shield_like={} (coinbase {}) unshield_like={} range={}..{} secs={:.1}",
+        "blocks={} txs={} shield_like={} (coinbase {}) unshield_like={} move_like={} range={}..{} secs={:.1}",
         st.blocks,
         st.txs,
         st.shield_like,
         st.coinbase_like,
         st.unshield_like,
+        st.move_like,
         start,
         end,
         t0.elapsed().as_secs_f32()
@@ -90,19 +91,21 @@ async fn go<S: BlockSource>(
     std::fs::rename(&tmp, out)?;
     std::fs::write(Coverage::path_for(out), serde_json::to_vec(&cov)?)?;
 
-    let sh = events.iter().filter(|e| e.kind == Kind::Shield).count();
+    let count = |k: Kind| events.iter().filter(|e| e.kind == k).count();
     let low = events.iter().filter(|e| e.confidence == zcrowd_core::Confidence::Low).count();
     println!(
-        "events={} shields={sh} unshields={} fetched_txs={} cached_txs={} secs={:.1}",
+        "events={} shields={} unshields={} moves={} fetched_txs={} cached_txs={} secs={:.1}",
         events.len(),
-        events.len() - sh,
+        count(Kind::Shield),
+        count(Kind::Unshield),
+        count(Kind::Move),
         r.fetched,
         r.from_cache,
         t0.elapsed().as_secs_f32()
     );
     let skipped: Vec<String> = r.skipped.iter().map(|(k, v)| format!("{k}={v}")).collect();
     println!(
-        "excluded: {} ambiguous_cross_pool(kept, low confidence, not counted in crowds)={low}",
+        "excluded: {} multi_pool(kept, low confidence, not counted in crowds)={low}",
         if skipped.is_empty() { "none".into() } else { skipped.join(" ") }
     );
     println!(

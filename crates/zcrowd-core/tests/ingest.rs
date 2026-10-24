@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
 use zcrowd_core::ingest::{RawCache, candidates, resolve};
-use zcrowd_core::source::{BlockSource, BlockSummary, Fixtures, Recording};
+use zcrowd_core::source::{BlockSource, BlockSummary, Fixtures, Recording, TxSummary};
 
 fn fixtures() -> Fixtures {
     Fixtures::open(&PathBuf::from(format!("{}/../../fixtures", env!("CARGO_MANIFEST_DIR")))).unwrap()
@@ -103,9 +103,18 @@ async fn wrong_or_broken_transactions_are_dropped_counted_and_never_cached() {
 /// A chain of synthetic compact blocks, served like a server would (every height, linked by hashes).
 struct Chain(Vec<BlockSummary>);
 
+fn tx(id: u64, n_vin: usize, n_vout: usize, shielded: bool, multi_pool: bool, coinbase: bool) -> TxSummary {
+    TxSummary { txid: format!("{id:064x}"), n_vin, n_vout, shielded, multi_pool, coinbase }
+}
+
+/// Every block carries one shield-like transaction: a long range with none is refused (research/43 S3-2).
 fn chain(from: u64, n: u64) -> Chain {
     let hash = |h: u64| format!("{h:064x}");
-    Chain((from..from + n).map(|h| BlockSummary { h, t: 1_700_000_000 + h, txs: vec![], hash: hash(h), prev_hash: hash(h - 1) }).collect())
+    Chain(
+        (from..from + n)
+            .map(|h| BlockSummary { h, t: 1_700_000_000 + h, txs: vec![tx(h, 1, 0, true, false, false)], hash: hash(h), prev_hash: hash(h - 1) })
+            .collect(),
+    )
 }
 
 impl BlockSource for Chain {
@@ -162,4 +171,46 @@ async fn block_chain_is_checked_across_request_chunks() {
     let mut c = chain(start, n);
     c.0[2_000].prev_hash = format!("{:064x}", 9);
     assert!(crawl_err(&c, start, end).await.contains("block 12000 does not follow block 11999"));
+}
+
+// Spec 41 A11 / S3-4: what the compact block says decides which transactions are fetched in full.
+#[tokio::test]
+async fn candidate_kinds_cover_coinbase_and_moves() {
+    let txs = vec![
+        tx(1, 0, 1, true, false, true),  // shielded coinbase: the compact vin leaves its input out, so n_vin is 0
+        tx(2, 2, 0, true, false, false), // transparent inputs
+        tx(3, 0, 1, true, false, false), // transparent output only
+        tx(4, 0, 0, true, true, false),  // no transparent part, two pools: a possible move
+        tx(5, 0, 0, true, false, false), // no transparent part, one pool: nothing to see
+        tx(6, 1, 1, false, false, false), // no shielded part
+        tx(7, 3, 2, true, true, false),  // everything: it is shield-like, decode sorts it out
+    ];
+    let src = Chain(vec![BlockSummary { h: 5, t: 9, txs, hash: format!("{:064x}", 5), prev_hash: format!("{:064x}", 4) }]);
+    let (c, st) = candidates(&src, 5, 5).await.unwrap();
+    let got: Vec<_> = c.iter().map(|c| (c.txid.trim_start_matches('0').to_string(), c.kind)).collect();
+    use zcrowd_core::Kind::{Move, Shield, Unshield};
+    assert_eq!(got, [("1".into(), Shield), ("2".into(), Shield), ("3".into(), Unshield), ("4".into(), Move), ("7".into(), Shield)]);
+    assert_eq!((st.shield_like, st.coinbase_like, st.unshield_like, st.move_like, st.txs), (3, 1, 1, 1, 7));
+}
+
+// Research/43 S3-2: a server that leaves pool data out must not look like a quiet month.
+#[tokio::test]
+async fn a_long_range_without_any_candidate_is_an_error() {
+    let quiet = |n: u64| {
+        let mut c = chain(1_000, n);
+        c.0.iter_mut().for_each(|b| b.txs = vec![tx(b.h, 0, 0, true, false, false)]);
+        c
+    };
+    // 100 blocks may be quiet; 101 may not
+    assert_eq!(candidates(&quiet(100), 1_000, 1_099).await.unwrap().1.blocks, 100);
+    let e = crawl_err(&quiet(101), 1_000, 1_100).await;
+    assert!(e.contains("101 blocks came back without one transaction") && e.contains("try another --server"), "{e}");
+    // one shield-like transaction anywhere in the range is enough
+    let mut c = quiet(500);
+    c.0[499].txs.push(tx(1, 1, 0, true, false, false));
+    assert_eq!(candidates(&c, 1_000, 1_499).await.unwrap().1.shield_like, 1);
+    // moves alone do not count: they have no transparent part, which is what a server without it would show
+    let mut c = quiet(500);
+    c.0[3].txs.push(tx(2, 0, 0, true, true, false));
+    assert!(crawl_err(&c, 1_000, 1_499).await.contains("500 blocks"));
 }

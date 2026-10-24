@@ -11,9 +11,15 @@ use zcash_transparent::address::TransparentAddress;
 /// Why a transaction produced no event. Counted and printed by `sync`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Skip {
+    /// A shielded transfer with no transparent part and no move between pools.
     NoTransparentPart,
     /// Transparent and shielded sides both present, but nothing crossed on balance.
     NoNetCrossing,
+    /// t_in + value balances = t_out + fee with fee >= 0 does not close, or a value is out of range: the amounts
+    /// cannot be trusted, so there is no event (spec 41 A11).
+    ConservationFails,
+    /// A Sprout JoinSplit moves value on the transparent side too; Sprout is not decoded.
+    SproutValue,
     /// The server sent bytes whose transaction id is not the one asked for: dropped (spec 41 A9).
     TxidMismatch,
 }
@@ -23,6 +29,8 @@ impl Skip {
         match self {
             Skip::NoTransparentPart => "no_transparent_part",
             Skip::NoNetCrossing => "no_net_crossing",
+            Skip::ConservationFails => "conservation_fails",
+            Skip::SproutValue => "sprout_value",
             Skip::TxidMismatch => "txid_mismatch",
         }
     }
@@ -86,7 +94,7 @@ pub fn input_address(script_sig: &[u8]) -> Option<String> {
 }
 
 fn parse(raw: &[u8], height: u64) -> Result<Transaction> {
-    let branch = BranchId::for_height(&MainNetwork, BlockHeight::from_u32(height as u32));
+    let branch = BranchId::for_height(&MainNetwork, BlockHeight::from_u32(u32::try_from(height).context("block height")?));
     Transaction::read(raw, branch).context("parse transaction")
 }
 
@@ -96,46 +104,91 @@ pub fn txid_of(raw: &[u8], height: u64) -> Result<String> {
     Ok(parse(raw, height)?.txid().to_string())
 }
 
-/// Turn a raw mainnet transaction into a turnstile event.
+/// What the public numbers of one transaction say (all zatoshi); see `classify`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Class {
+    pub kind: Kind,
+    pub zat: u64,
+    pub pool: Pool,
+    /// Known only without transparent inputs: the prevout values are not in the transaction.
+    pub fee: Option<u64>,
+    /// More than one shielded pool is involved in a way that is not a plain shield, unshield or move.
+    pub low: bool,
+}
+
+/// Spec 41 A11. `vb` = value balances of Sapling, Orchard, Ironwood (positive: value leaves that pool, negative:
+/// enters it). E = pools with a negative balance, L = pools with a positive one.
+/// - Shield: one pool in E, L empty, transparent inputs (or coinbase). zat = value entering that pool.
+/// - Unshield: E empty, one pool in L, transparent outputs. zat = value leaving it, fee included.
+/// - Move: one pool in E, L not empty, no transparent output (a Shield instead when there are transparent inputs).
+/// - Anything else that crossed or moved value: low confidence, pool Mixed, net amount.
 ///
-/// net = -(sapling value_balance + orchard value_balance): positive means value entered the shielded pools.
-/// - net > 0: shield of `net` (exact even with transparent change; fee not visible without prevout values).
-/// - net < 0: unshield of `-net` (fee included). With no transparent inputs, fee_zat = -net - sum(outputs).
-/// - Shielded coinbase is kept and flagged. Cross-pool transactions whose Sapling and Orchard balances
-///   have opposite signs may hide a second crossing: kept as low confidence, excluded from crowds.
+/// Conservation t_in + sum(vb) = t_out + fee: with no transparent input t_in is 0, so the fee is what is left and a
+/// negative one means the numbers are wrong: `ConservationFails`, never a clamped fee. All sums are 128-bit.
+pub fn classify(vb: [i64; 3], n_tin: usize, n_tout: usize, t_out: u128) -> Result<Class, Skip> {
+    let e: Vec<usize> = (0..3).filter(|&i| vb[i] < 0).collect();
+    let l: Vec<usize> = (0..3).filter(|&i| vb[i] > 0).collect();
+    if e.is_empty() && l.is_empty() {
+        return Err(Skip::NoNetCrossing);
+    }
+    let entering: i128 = e.iter().map(|&i| -i128::from(vb[i])).sum();
+    let leaving: i128 = l.iter().map(|&i| i128::from(vb[i])).sum();
+    let (ti, to) = (n_tin > 0, n_tout > 0);
+    let fee = i128::try_from(t_out).ok().map(|o| leaving - entering - o).ok_or(Skip::ConservationFails)?;
+    if !ti && fee < 0 {
+        return Err(Skip::ConservationFails);
+    }
+    let fee_zat = if ti { None } else { Some(u64::try_from(fee).map_err(|_| Skip::ConservationFails)?) };
+    let (kind, amount, pool, low) = match (e.len(), l.len()) {
+        (1, 0) if ti => (Kind::Shield, entering, Pool::SINGLE[e[0]], false),
+        (0, 1) if to => (Kind::Unshield, leaving, Pool::SINGLE[l[0]], false),
+        (1, 1..) if !to => (if ti { Kind::Shield } else { Kind::Move }, entering, Pool::SINGLE[e[0]], false),
+        (0, _) if !to => return Err(Skip::NoNetCrossing), // shielded value left only as the fee
+        _ if !ti && !to => (Kind::Move, entering, Pool::Mixed, true),
+        _ if leaving > entering => (Kind::Unshield, leaving - entering, Pool::Mixed, true),
+        _ => (Kind::Shield, entering - leaving, Pool::Mixed, true),
+    };
+    if amount == 0 {
+        return Err(Skip::NoNetCrossing);
+    }
+    Ok(Class { kind, zat: u64::try_from(amount).map_err(|_| Skip::ConservationFails)?, pool, fee: fee_zat, low })
+}
+
+/// Turn a raw mainnet transaction into an event: a turnstile crossing or a move between shielded pools.
+/// The three pool balances come from `Transaction::{sapling,orchard,ironwood}_bundle().value_balance()`; the Ironwood
+/// bundle exists in v6 transactions only (zcash_primitives 0.31 src/transaction/mod.rs:661). `classify` does the rest.
+/// Shielded coinbase is kept and flagged.
 pub fn event_from_tx(raw: &[u8], height: u64, time: u64) -> Result<Decoded> {
     let tx = parse(raw, height)?;
-    let Some(tb) = tx.transparent_bundle() else { return Ok(Decoded::Skip(Skip::NoTransparentPart)) };
-    let sap = tx.sapling_bundle().map(|b| i64::from(*b.value_balance())).unwrap_or(0);
-    let orc = tx.orchard_bundle().map(|b| i64::from(*b.value_balance())).unwrap_or(0);
-    let net = -(sap + orc);
-    let pool = match (sap != 0, orc != 0) {
-        (true, true) => Pool::Mixed,
-        (false, true) => Pool::Orchard,
-        _ => Pool::Sapling,
+    // A bundle that is absent moved nothing in its pool, so its balance is 0.
+    let vb = [
+        tx.sapling_bundle().map_or(0, |b| i64::from(*b.value_balance())),
+        tx.orchard_bundle().map_or(0, |b| i64::from(*b.value_balance())),
+        tx.ironwood_bundle().map_or(0, |b| i64::from(*b.value_balance())),
+    ];
+    // Sprout `value_balance`: positive = added to the transparent pool (zcash_primitives 0.31 sprout.rs). Not decoded.
+    if tx.sprout_bundle().is_some_and(|b| b.value_balance().map(i64::from) != Some(0)) {
+        return Ok(Decoded::Skip(Skip::SproutValue));
+    }
+    let tb = tx.transparent_bundle();
+    let (n_tin, n_tout) = tb.map_or((0, 0), |b| (b.vin.len(), b.vout.len()));
+    let t_out: u128 = tb.map_or(0, |b| b.vout.iter().map(|o| u128::from(u64::from(o.value()))).sum());
+    let c = match classify(vb, n_tin, n_tout, t_out) {
+        Err(Skip::NoNetCrossing) if tb.is_none() => return Ok(Decoded::Skip(Skip::NoTransparentPart)),
+        Err(s) => return Ok(Decoded::Skip(s)),
+        Ok(c) => c,
     };
-    let (n_tin, n_tout) = (tb.vin.len(), tb.vout.len());
-    let t_out: u64 = tb.vout.iter().map(|o| u64::from(o.value())).sum();
-    let (kind, zat, fee_zat) = match net {
-        0 => return Ok(Decoded::Skip(Skip::NoNetCrossing)),
-        n if n > 0 => (Kind::Shield, n as u64, None),
-        n => {
-            let z = n.unsigned_abs();
-            (Kind::Unshield, z, (n_tin == 0).then(|| z.saturating_sub(t_out)))
-        }
-    };
-    let ambiguous = sap != 0 && orc != 0 && (sap > 0) != (orc > 0);
     let addrs = |it: BTreeSet<String>| it.into_iter().collect::<Vec<_>>();
-    let src = if kind == Kind::Shield {
+    let src = if c.kind == Kind::Shield {
         #[allow(deprecated)]
-        addrs(tb.vin.iter().filter_map(|i| input_address(&i.script_sig().0.0)).collect())
+        addrs(tb.iter().flat_map(|b| &b.vin).filter_map(|i| input_address(&i.script_sig().0.0)).collect())
     } else {
         vec![]
     };
-    let dst = if kind == Kind::Unshield {
+    let dst = if c.kind == Kind::Unshield {
         addrs(
-            tb.vout
-                .iter()
+            tb.iter()
+                .flat_map(|b| &b.vout)
                 .filter_map(|o| match o.recipient_address()? {
                     TransparentAddress::PublicKeyHash(h) => Some(p2pkh(h)),
                     TransparentAddress::ScriptHash(h) => Some(p2sh(h)),
@@ -148,15 +201,15 @@ pub fn event_from_tx(raw: &[u8], height: u64, time: u64) -> Result<Decoded> {
     Ok(Decoded::Event(Event {
         h: height,
         t: time,
-        kind,
-        zat,
-        pool,
-        fee_zat,
+        kind: c.kind,
+        zat: c.zat,
+        pool: c.pool,
+        fee_zat: c.fee,
         n_tin,
         n_tout,
         txid: tx.txid().to_string(),
-        confidence: if ambiguous { Confidence::Low } else { Confidence::High },
-        coinbase: tb.is_coinbase(),
+        confidence: if c.low { Confidence::Low } else { Confidence::High },
+        coinbase: tb.is_some_and(|b| b.is_coinbase()),
         src,
         dst,
     }))
@@ -187,4 +240,72 @@ impl TryFromAddress for Taddr {
 pub fn canonical_taddr(s: &str) -> Result<String> {
     let a = ZcashAddress::try_from_encoded(s.trim()).map_err(|_| anyhow::anyhow!("not a Zcash address"))?;
     a.convert::<Taddr>().map(|t| t.0).map_err(|_| anyhow::anyhow!("need a mainnet transparent address (t1..., t3... or tex1...)"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ok(vb: [i64; 3], tin: usize, tout: usize, t_out: u128) -> Class {
+        classify(vb, tin, tout, t_out).unwrap()
+    }
+
+    #[test]
+    fn single_pool_shield_and_unshield() {
+        let c = ok([-5_000_000, 0, 0], 1, 1, 100);
+        assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Shield, 5_000_000, Pool::Sapling, None, false));
+        // fee is inside the unshield amount: 1_000_000 leaves Ironwood, 985_000 reaches the address
+        let c = ok([0, 0, 1_000_000], 0, 1, 985_000);
+        assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Unshield, 1_000_000, Pool::Ironwood, Some(15_000), false));
+    }
+
+    // E10 research/44 #7 (48ca0a26...): Ironwood +12_319_850 in, Orchard 46_946 out, one transparent input, no output.
+    // Under A11 this is a shield into Ironwood of the value that arrived there, not the 12_272_904 net crossing.
+    #[test]
+    fn shield_into_one_pool_while_another_pays_in() {
+        let c = ok([0, 46_946, -12_319_850], 1, 0, 0);
+        assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Shield, 12_319_850, Pool::Ironwood, None, false));
+    }
+
+    // research/44 #9 (ce7e196a...): two pools pay out to a transparent output, so it is not a single-pool unshield.
+    #[test]
+    fn two_leaving_pools_are_low_confidence_unshield() {
+        let c = ok([0, 3_494_678, 530_322], 0, 1, 4_000_000);
+        assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Unshield, 4_025_000, Pool::Mixed, Some(25_000), true));
+    }
+
+    #[test]
+    fn move_between_pools() {
+        // Orchard pays out 30_000, Ironwood receives 5_000, 25_000 is the fee
+        let c = ok([0, 30_000, -5_000], 0, 0, 0);
+        assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Move, 5_000, Pool::Ironwood, Some(25_000), false));
+        // the same with a transparent input is a shield into Ironwood
+        let c = ok([0, 30_000, -5_000], 1, 0, 0);
+        assert_eq!((c.kind, c.pool, c.fee), (Kind::Shield, Pool::Ironwood, None));
+        // a transparent output makes it ambiguous
+        let c = ok([0, 30_000, -5_000], 0, 1, 20_000);
+        assert_eq!((c.kind, c.zat, c.pool, c.low), (Kind::Unshield, 25_000, Pool::Mixed, true));
+        // two pools receive from one: still a move, but not a single-pool one
+        let c = ok([-4_000, -6_000, 20_000], 0, 0, 0);
+        assert_eq!((c.kind, c.zat, c.pool, c.fee, c.low), (Kind::Move, 10_000, Pool::Mixed, Some(10_000), true));
+    }
+
+    #[test]
+    fn shielded_to_shielded_with_only_a_fee_is_no_event() {
+        assert_eq!(classify([15_000, 0, 0], 0, 0, 0), Err(Skip::NoNetCrossing));
+        assert_eq!(classify([0, 0, 0], 1, 1, 7), Err(Skip::NoNetCrossing));
+        assert_eq!(classify([7_000, 8_000, 0], 0, 0, 0), Err(Skip::NoNetCrossing));
+    }
+
+    // Conservation: no transparent input means t_in = 0, so the fee t_out leaves is what is left and cannot be < 0.
+    #[test]
+    fn numbers_that_do_not_close_are_refused_not_clamped() {
+        assert_eq!(classify([10_000, 0, 0], 0, 1, 20_000), Err(Skip::ConservationFails)); // pays out more than left
+        assert_eq!(classify([-100, 0, 0], 0, 0, 0), Err(Skip::ConservationFails)); // value from nowhere
+        assert_eq!(classify([0, 0, i64::MIN], 0, 1, 0), Err(Skip::ConservationFails));
+        assert_eq!(classify([i64::MAX; 3], 0, 1, 0), Err(Skip::ConservationFails)); // sum does not fit a u64 fee
+        assert_eq!(classify([0, 0, 1], 0, 1, u128::MAX), Err(Skip::ConservationFails));
+        // with a transparent input the prevouts are unknown, so the fee is unknown and nothing is refused
+        assert_eq!(ok([10_000, 0, 0], 1, 1, 20_000).fee, None);
+    }
 }

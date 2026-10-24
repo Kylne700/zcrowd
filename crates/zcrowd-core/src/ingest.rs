@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 pub const CHUNK: u64 = 2000;
 pub const MAX_CONCURRENCY: usize = 8;
+/// A range longer than this with no shield-like or unshield-like transaction at all is refused (see `candidates`).
+const MIN_BLOCKS_WITH_CANDIDATES: usize = 100;
 
 #[derive(Clone, Debug)]
 pub struct Cand {
@@ -23,6 +25,8 @@ pub struct Stats {
     pub txs: usize,
     pub shield_like: usize,
     pub unshield_like: usize,
+    /// No transparent part but two or more shielded pools touched: possible moves between pools.
+    pub move_like: usize,
     /// Of shield_like: coinbase transactions (shielded block rewards).
     pub coinbase_like: usize,
     pub coverage: Option<Coverage>,
@@ -52,8 +56,9 @@ fn link(blk: &BlockSummary, prev: &mut Option<(u64, String)>, start: u64) -> Res
     Ok(())
 }
 
-/// Shield-like: transparent inputs + shielded activity. Unshield-like: no transparent inputs, transparent
-/// outputs + shielded activity. Exact amounts come later from the full transaction.
+/// Shield-like: transparent inputs (or the coinbase) + shielded activity. Unshield-like: no transparent inputs,
+/// transparent outputs + shielded activity. Move-like: no transparent part, two or more shielded pools touched.
+/// Exact amounts come later from the full transaction.
 /// The requests made depend only on [start, end] and on which transactions are candidates in it.
 pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result<(Vec<Cand>, Stats)> {
     let (mut out, mut st) = (vec![], Stats::default());
@@ -74,13 +79,17 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
                 if !t.shielded {
                     continue;
                 }
-                let kind = if t.n_vin > 0 {
+                // The compact vin omits the coinbase input, so a shielded coinbase has n_vin == 0 (spec 41 S3-4).
+                let kind = if t.n_vin > 0 || t.coinbase {
                     st.shield_like += 1;
                     st.coinbase_like += usize::from(t.coinbase);
                     Kind::Shield
                 } else if t.n_vout > 0 {
                     st.unshield_like += 1;
                     Kind::Unshield
+                } else if t.multi_pool {
+                    st.move_like += 1;
+                    Kind::Move
                 } else {
                     continue;
                 };
@@ -91,6 +100,15 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
     }
     if strict && prev.as_ref().map(|p| p.0) != Some(end) {
         bail!("the server stopped at block {:?} but {end} was asked for (try another --server)", prev.map(|p| p.0));
+    }
+    // Mainnet has dozens of these per 100 blocks; none means the server leaves shielded or transparent data out
+    // (research/43 S3-2). Without this an empty answer would look like a complete, quiet period.
+    if st.blocks > MIN_BLOCKS_WITH_CANDIDATES && st.shield_like + st.unshield_like == 0 {
+        bail!(
+            "{} blocks came back without one transaction that mixes shielded and transparent data: this server leaves \
+             pool data out (try another --server)",
+            st.blocks
+        );
     }
     Ok((out, st))
 }

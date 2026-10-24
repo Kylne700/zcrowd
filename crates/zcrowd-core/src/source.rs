@@ -16,7 +16,11 @@ pub struct TxSummary {
     pub txid: String,
     pub n_vin: usize,
     pub n_vout: usize,
+    /// Any Sapling, Orchard or Ironwood part.
     pub shielded: bool,
+    /// Two or more of those pools are touched: a possible move between pools (spec 41 A11).
+    #[serde(default)]
+    pub multi_pool: bool,
     pub coinbase: bool,
 }
 
@@ -170,7 +174,8 @@ impl BlockSource for Lwd {
         let range = BlockRange {
             start: Some(BlockId { height: start, hash: vec![] }),
             end: Some(BlockId { height: end, hash: vec![] }),
-            pool_types: vec![PoolType::Transparent as i32, PoolType::Sapling as i32, PoolType::Orchard as i32],
+            // Every pool: an Ironwood-only transaction is invisible otherwise (spec 41 A11, research/43 S1-1).
+            pool_types: [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard, PoolType::Ironwood].map(|p| p as i32).to_vec(),
         };
         let mut stream = retry("get_block_range", || {
             let mut c = self.client.clone();
@@ -192,12 +197,16 @@ impl BlockSource for Lwd {
                 .map(|t| {
                     let mut id = t.txid.clone();
                     id.reverse();
+                    let pools = [!(t.spends.is_empty() && t.outputs.is_empty()), !t.actions.is_empty(), !t.ironwood_actions.is_empty()];
                     TxSummary {
                         txid: hex::encode(id),
                         n_vin: t.vin.len(),
                         n_vout: t.vout.len(),
-                        shielded: !(t.spends.is_empty() && t.outputs.is_empty() && t.actions.is_empty()),
-                        coinbase: t.vin.len() == 1 && t.vin[0].prevout_txid.iter().all(|&x| x == 0),
+                        shielded: pools.contains(&true),
+                        multi_pool: pools.iter().filter(|&&p| p).count() > 1,
+                        // The compact `vin` leaves the coinbase input out; the coinbase is the block's first
+                        // transaction (zcash_client_backend 0.25 proto/compact_formats.rs, `CompactTx.vin`).
+                        coinbase: t.index == 0,
                     }
                 })
                 .collect();

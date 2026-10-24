@@ -12,8 +12,10 @@ type Layer = (&'static str, Result<(), String>);
 pub fn enter() -> bool {
     #[cfg(target_os = "linux")]
     let layers = install(true);
+    #[cfg(target_os = "macos")]
+    let layers = install();
     // Windows and the rest: nothing light cuts one running process off (AppContainer is a different way to start one).
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let layers: Vec<Layer> = Vec::new();
     if layers.is_empty() || layers.iter().any(|l| l.1.is_err()) || std::io::stderr().is_terminal() {
         eprintln!("{}", note(&layers));
@@ -98,6 +100,25 @@ fn seccomp() -> Result<(), String> {
 ))]
 fn seccomp() -> Result<(), String> {
     Err("not built for this CPU architecture".into())
+}
+
+/// macOS: the system's "no-network" sandbox profile (`sandbox_init` in libSystem; deprecated since 10.8, still there).
+#[cfg(target_os = "macos")]
+fn install() -> Vec<Layer> {
+    use std::ffi::{CStr, c_char, c_int};
+    const SANDBOX_NAMED: u64 = 0x0001; // sandbox.h: the profile is one of the kSBXProfile* names
+    unsafe extern "C" {
+        static kSBXProfileNoNetwork: c_char; // `extern const char kSBXProfileNoNetwork[]`: its address is the name
+        fn sandbox_init(profile: *const c_char, flags: u64, errorbuf: *mut *mut c_char) -> c_int;
+        fn sandbox_free_error(errorbuf: *mut c_char);
+    }
+    let mut err: *mut c_char = std::ptr::null_mut();
+    // SAFETY: the profile name is a C string in libSystem; err is a valid out pointer.
+    let r = unsafe { sandbox_init(&raw const kSBXProfileNoNetwork, SANDBOX_NAMED, &mut err) };
+    // SAFETY: err is null or a C string that sandbox_init allocated; it is copied, then freed (sandbox_free_error takes null).
+    let why = (!err.is_null()).then(|| unsafe { CStr::from_ptr(err) }.to_string_lossy().replace('\n', " "));
+    unsafe { sandbox_free_error(err) };
+    vec![("macOS sandbox (no-network)", if r == 0 { Ok(()) } else { Err(why.unwrap_or_else(|| format!("sandbox_init returned {r}"))) })]
 }
 
 #[cfg(test)]
@@ -235,6 +256,19 @@ mod tests {
             go.send(()).unwrap();
             assert_eq!(older.join().unwrap(), Some(std::io::ErrorKind::PermissionDenied), "a thread from before enter() (TSYNC)");
             every_socket_is_refused(closed);
+        }
+
+        /// macOS: once `enter()` has put the process in the no-network profile, the closed port is not even refused.
+        #[test]
+        #[cfg(target_os = "macos")]
+        fn enter_cuts_a_connection_in_a_child() {
+            if !in_child("enter_cuts_a_connection_in_a_child") {
+                return;
+            }
+            let closed = closed_port();
+            assert!(enter());
+            let e = std::net::TcpStream::connect(closed).unwrap_err();
+            assert_ne!(e.kind(), std::io::ErrorKind::ConnectionRefused, "{e}");
         }
 
         /// The seccomp layer alone, as on a host that refuses user namespaces (Ubuntu 24.04 by default).

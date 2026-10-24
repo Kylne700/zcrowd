@@ -389,6 +389,32 @@ server saw 3 page loads and nothing else)`; the privacy scan of the repository o
 0 key-like patterns and 0 mail addresses in files, 0 personal-string hits and 0 home paths in history (the only mail addresses in
 history are the neutral author address and the `noreply` trailer).
 
+## Sandbox merge and review-fix stage (S9d)
+
+Master is S9c's master (434e3d4) with branch `sandbox` merged (69a8f08, no conflict) and the items below, one commit each.
+No data was refreshed and `source.rs` and `ingest.rs` are untouched (the `sync` branch is merged and the data refreshed after
+this stage), so every sample number below is a count on the unchanged sample.
+
+- **The sandbox holds without user namespaces (S9s).** `enter()` installs every layer the OS has and names them in one note: on
+  Linux the empty network namespace as before, then always a seccomp filter (no_new_privs, all threads) that refuses `socket`
+  (every family), `socketpair` and io_uring with EPERM, and every call of another ABI (i386, x32); on macOS the no-network sandbox
+  profile; on Windows none, and the note says the network is NOT cut. Tests: `sandbox::tests::*` (child processes, through
+  `enter()` and the filter alone), `check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything`;
+  `sandbox_blocks_connections` now runs on macOS too. The two new P2 lines of the audit:
+  `ok    P2 the seccomp filter refuses TCP, UDP, Unix sockets, socketpair, io_uring and other ABIs, through enter() and alone (tests sandbox::tests::*)`
+  `ok    P2 check, report and verify each install the seccomp filter before they read their data (test check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything)`
+  The two earlier transcripts of the audit above show the P2 lines of their day. NOT VERIFIED: the macOS run, a real Ubuntu
+  24.04 (simulated with `max_user_namespaces=0`).
+- **e2e reads `--json` from stdout only.** Where a layer of the sandbox is missing (a host without user namespaces) the note is
+  on stderr; `tests/e2e.sh` used to parse `check --json 2>&1` and would have failed on that note. Now stderr goes to its own file,
+  and the address-echo test of `--to --json` looks in both files.
+- **CI.** New job `sandbox` (ubuntu-24.04 without the sysctl switch: the seccomp tests, the note on a terminal, and the namespace
+  layer shown, not asserted) and the macOS step "The macOS sandbox as a user sees it" in the `test` job, both as in the S9s
+  handoff with one change: `run: "cargo test --locked -p zcrowd --bin zcrowd sandbox::tests::"` is quoted, because the plain
+  scalar ending in `::` is not valid YAML (PyYAML: `mapping values are not allowed here`) and GitHub would have refused the
+  whole workflow. NOT VERIFIED: no CI run exists (the lead pushes to the private origin later); `actionlint` is not installed,
+  the file was parsed with PyYAML only (jobs: test, sandbox, e2e, browsers, deny).
+
 ## Deviations from the first design (and why)
 
 1. `--unshield 1.23456789` prints NO MATCH plus the odd-amount note, not RED (the first design said RED; the privacy spec made odd amounts a
@@ -470,8 +496,9 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   that leaves a pool out for only part of the range is not noticed.
 - The consensus side of the Orchard finding above (zebrad and zcashd were not read). The oldest Rust that builds it
   is 1.90 (`rust-version`; `cargo +1.90.0 check --workspace --all-targets --locked` passes, S9c); the tests ran with 1.97.1 only. Whether
-  the sandbox tests and audit P2 run on a CI runner: Ubuntu 24.04 can set `kernel.apparmor_restrict_unprivileged_userns=1`,
-  which breaks `unshare` of a user namespace (no CI run has happened).
+  the empty network namespace works on a default Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`): the
+  seccomp layer does not need it, and the `sandbox` CI job runs without the sysctl switch to show both (no CI run has
+  happened). The macOS sandbox run (compiled only).
 - A lightwalletd server that lies consistently (compact blocks carry no proof of work). Independence of the default
   servers: `na.zec.rocks` and `eu.zec.rocks` share the domain of `zec.rocks` and are probably one operator (their output
   was byte-identical once). Cold-sync time of 30 days without Tor (the measured 2,048 s had 6,227 of 67,977 transactions cached; the Tor runs are in

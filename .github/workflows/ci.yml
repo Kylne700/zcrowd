@@ -6,6 +6,8 @@ name: CI
 # e2e       Linux: tests/e2e.sh (fmt, build, clippy -D warnings, every test, the real binary on the committed fixtures)
 #           and then tests/audit.sh (privacy claims, JS-vs-Rust parity, headless page test).
 # browsers  the web page in Chromium, Firefox and WebKit.
+# sandbox   the network cut of check, report and verify on a default Ubuntu 24.04 (no sysctl switch): the seccomp filter must hold
+#           whether or not user namespaces are allowed there.
 # deny      cargo-deny with deny.toml: advisories, licences, bans, sources.
 # Offline on purpose: fixtures only, no lightwalletd, no Tor network.
 # Linux jobs name ubuntu-24.04, not ubuntu-latest: GitHub moves that label to Ubuntu 26.04 in November 2026, and CI should not change
@@ -101,6 +103,75 @@ jobs:
 
       - name: Test
         run: cargo test --locked --no-fail-fast
+
+      - name: The macOS sandbox as a user sees it
+        if: runner.os == 'macOS'
+        run: |
+          out=$(script -q /dev/null target/debug/zcrowd sandbox-probe 127.0.0.1:9 --sandbox | tr -d '\r')
+          printf '%s\n' "$out"
+          grep -qxF 'note: network cut for this command: macOS sandbox (no-network)' <<<"$out"
+          grep -q '^blocked: ' <<<"$out"
+          if grep -q 'Connection refused' <<<"$out"; then echo "refused, not cut"; exit 1; fi
+
+  # The sandbox as a default Ubuntu 24.04 desktop gets it: no sysctl switch here. The seccomp filter must hold either
+  # way; whether user namespaces are allowed is only shown.
+  sandbox:
+    name: sandbox on a default Ubuntu 24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Rust ${{ env.RUST_VERSION }}
+        id: rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          echo "cargo_home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
+
+      - name: Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.rust.outputs.cargo_home }}/registry/index
+            ${{ steps.rust.outputs.cargo_home }}/registry/cache
+            ${{ steps.rust.outputs.cargo_home }}/git/db
+            target
+          key: cargo-${{ runner.os }}-test-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-test-${{ env.RUST_VERSION }}-
+
+      - name: What this runner allows (shown, not asserted)
+        run: |
+          uname -r
+          echo "apparmor_restrict_unprivileged_userns=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
+          echo "io_uring_disabled=$(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null || echo absent)"
+          if unshare -rn true; then echo "unshare -rn: allowed"; else echo "unshare -rn: refused"; fi
+
+      - name: Cargo.lock is up to date
+        run: cargo fetch --locked
+
+      - name: The seccomp filter in a child process, through enter() and alone
+        run: "cargo test --locked -p zcrowd --bin zcrowd sandbox::tests::"
+
+      - name: The binary cuts its own network; check, report and verify install the filter before they read their data
+        run: cargo test --locked -p zcrowd --test cli -- sandbox_blocks_connections check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything
+
+      - name: The note a user sees on a terminal
+        run: |
+          out=$(script -qec "target/debug/zcrowd sandbox-probe 127.0.0.1:9 --sandbox" /dev/null | tr -d '\r')
+          printf '%s\n' "$out"
+          grep -Eq '^note: network cut for this command: (empty network namespace \+ )?seccomp socket filter( \(.*\))?$' <<<"$out"
+          grep -qxF 'blocked: Operation not permitted (os error 1)' <<<"$out"
+
+      # The S2-1 test needs user namespaces, which a default Ubuntu 24.04 may refuse: shown, does not fail the job.
+      - name: The namespace layer (informative)
+        continue-on-error: true
+        run: cargo test --locked -p zcrowd --test cli -- check_report_and_verify_each_leave_the_network_before_they_read_anything
 
   e2e:
     name: fmt, clippy, tests and audit (Linux)

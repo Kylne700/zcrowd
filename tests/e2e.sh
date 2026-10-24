@@ -73,7 +73,8 @@ done
 grep -q '^crowd: k=40 weighted=28\.0 ' "$T/c125sapling" && grep -q '^verdict: GREEN' "$T/c125sapling" \
   && grep -q '^crowd: k=0 weighted=0\.0 ' "$T/c125ironwood" && grep -q '^verdict: NO MATCH' "$T/c125ironwood" \
   || die "check 125: expected Sapling k=40 GREEN and Ironwood NO MATCH"
-printf '1.2497\n' | "$BIN" check --unshield - --json --data "$D" >"$T/c3" 2>&1 || die "check --json"
+# stdout only: where a layer of the sandbox is missing, its note is on stderr and is no part of the JSON
+printf '1.2497\n' | "$BIN" check --unshield - --json --data "$D" >"$T/c3" 2>"$T/c3.err" || { cat "$T/c3.err" >&2; die "check --json"; }
 python3 - "$T/c3" <<'PY' || die "check --json: fields differ from the text output"
 import json, sys
 j = json.load(open(sys.argv[1]))
@@ -100,13 +101,13 @@ contract "$T/c4" "check --to"
 grep -q '^verdict: RED' "$T/c4" && grep -q '^address: RED - this address shielded on ' "$T/c4" || die "check --to: reuse of a shield source address must be RED"
 if grep -qF "$ADDR" "$T/c4"; then die "check --to echoed the address"; fi
 # --json must carry the same overall verdict as the text (the amount alone is GREEN, the reused address makes it RED)
-printf '1.2497\n%s\n' "$ADDR" | "$BIN" check --unshield - --to - --json --data "$D" >"$T/c5" 2>&1 || die "check --to --json"
+printf '1.2497\n%s\n' "$ADDR" | "$BIN" check --unshield - --to - --json --data "$D" >"$T/c5" 2>"$T/c5.err" || { cat "$T/c5.err" >&2; die "check --to --json"; }
 python3 - "$T/c5" <<'PY' || die "check --to --json: verdict is not the overall one"
 import json, sys
 j = json.load(open(sys.argv[1]))
 assert (j["verdict"], j["amount_verdict"], j["address_verdict"]) == ("RED", "GREEN", "RED"), j
 PY
-if grep -qF "$ADDR" "$T/c5"; then die "check --to --json echoed the address"; fi
+if grep -qF "$ADDR" "$T/c5" "$T/c5.err"; then die "check --to --json echoed the address"; fi
 # the README RED example: 3.73 ZEC has exactly one earlier shield of about that size in the sample, and the sample has
 # no unshield of about that size at all (so the README shows a lone shield, not a linked pair)
 python3 - "$D" <<'PY' || die "the sample holds an unshield of about 3.73 ZEC: the README example would show a real pair"

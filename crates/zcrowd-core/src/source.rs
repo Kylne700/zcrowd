@@ -583,6 +583,10 @@ impl BlockSource for Fixtures {
         Ok(self.blocks.iter().filter(|b| (start..=end).contains(&b.h)).cloned().collect())
     }
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
+        // Test hook, offline source only: a slow server, so that a test can stop a sync half-way through its transactions.
+        if let Some(ms) = std::env::var("ZCROWD_FIXTURES_DELAY_MS").ok().and_then(|v| v.parse().ok()) {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+        }
         let h = self
             .blocks
             .iter()

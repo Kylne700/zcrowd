@@ -14,13 +14,60 @@ const BLOCKS_PER_DAY: u64 = 1152; // 75 s blocks
 const REORG_MARGIN: u64 = 10;
 
 pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurrency: usize, end_height: Option<u64>) -> Result<()> {
-    match src {
-        Src::Net(s) => {
-            eprintln!("server: {} ({})", s.url, if s.tor { "via Tor" } else { "direct" });
-            go(&s, days, out, candidates_only, concurrency, end_height).await
+    // Listening before any work starts. A stop is taken at the next await point and never inside a write: the cache entries
+    // and the saved file are written by code that does not await, so what is on disk is whole, and the next sync goes on
+    // from the transactions already cached. (While Tor starts, before this, a signal ends the process at once: nothing is
+    // written yet.)
+    let stop = stop_signal()?;
+    let work = async {
+        match src {
+            Src::Net(s) => {
+                eprintln!("server: {} ({})", s.url, if s.tor { "via Tor" } else { "direct" });
+                go(&s, days, out, candidates_only, concurrency, end_height).await
+            }
+            Src::Fix(s) => go(&s, days, out, candidates_only, concurrency, end_height).await,
         }
-        Src::Fix(s) => go(&s, days, out, candidates_only, concurrency, end_height).await,
+    };
+    tokio::select! {
+        r = work => r,
+        (name, code) = stop => {
+            // `work` is gone by now: its lock is released
+            eprintln!(
+                "sync: stopped by {name}. {} is as it was, and the transactions already fetched are kept in {}: run the same command again to go on.",
+                out.display(),
+                cache_dir(out).display()
+            );
+            std::process::exit(code)
+        }
     }
+}
+
+/// Resolves, with the signal's name and the exit code a shell shows for it, when the process is asked to stop.
+#[cfg(unix)]
+fn stop_signal() -> Result<impl std::future::Future<Output = (&'static str, i32)>> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut int = signal(SignalKind::interrupt())?;
+    let mut term = signal(SignalKind::terminate())?;
+    Ok(async move {
+        tokio::select! {
+            _ = int.recv() => ("SIGINT", 130),
+            _ = term.recv() => ("SIGTERM", 143),
+        }
+    })
+}
+
+/// shortcut: Ctrl-C only; a terminate request on Windows ends the process at once. Upgrade when Windows is supported.
+#[cfg(not(unix))]
+fn stop_signal() -> Result<impl std::future::Future<Output = (&'static str, i32)>> {
+    Ok(async {
+        let _ = tokio::signal::ctrl_c().await;
+        ("Ctrl-C", 130)
+    })
+}
+
+/// Where the raw transactions of a sync into `out` are kept.
+fn cache_dir(out: &Path) -> std::path::PathBuf {
+    out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).join("tx")
 }
 
 /// Extra blocks fetched beyond `days`, so that `check --lookback-days <days>` does not find the window a hair short:
@@ -179,8 +226,7 @@ async fn go<S: BlockSource>(
         return Ok(());
     }
     let Some(new_cov) = st.coverage else { anyhow::bail!("server returned no blocks") };
-    let dir = out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let cache = RawCache(dir.join("tx"));
+    let cache = RawCache(cache_dir(out));
     p.txs.total.store(cands.len() as u64, Relaxed);
     eprintln!("sync: fetching up to {} transactions (the ones already saved are not fetched again)", cands.len());
     let r = resolve(&p, &cands, &cache, concurrency).await?;

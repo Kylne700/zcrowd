@@ -2,9 +2,10 @@
 
 **How big is the crowd your Zcash unshield hides in? Find out offline, before you send.**
 
-A Rust library and command line tool. It reads the public record of every shield (transparent to shielded) and
-unshield (shielded to transparent) on Zcash mainnet, and tells you how many earlier shields look like the amount you
-are about to unshield. Track: CORE & TOOLING (ZECATHON). Licence: MIT.
+A Rust library and command line tool. It reads the public record of every shield (transparent to shielded), unshield
+(shielded to transparent) and move between shielded pools (Sapling, Orchard, Ironwood) on Zcash mainnet, and tells you
+how many earlier entries into your pool look like the amount you are about to unshield. Track: CORE & TOOLING
+(ZECATHON). Licence: MIT.
 
 AI disclosure: built by Kylne700 with an AI coding assistant (Claude).
 
@@ -14,19 +15,20 @@ Shielded balances are private. The moment money crosses between the transparent 
 the time are public. If you shield 3.73 ZEC and later unshield about 3.73 ZEC, and nobody else shielded about that amount
 in between, an observer who matches by amount sees a single candidate for the other half of the pair. Nothing is
 broken; the amount is the fingerprint. Whether your amount sits in a crowd depends on how many other shields of about
-that amount came before it.
+that amount into the same shielded pool came before it: a shield into Sapling is no cover for an unshield from Ironwood.
 
-Measured on the committed sample (`fixtures/flows-sample.ndjson`: 6,227 real events, blocks 3494295..3528999, 2026-09-24
-to 2026-10-24). Each of the 1,440 unshields of the last 14 days, scored against the shields of the 14 days before it:
+Measured on the committed sample (`fixtures/flows-sample.ndjson`: 67,965 real events from all three shielded pools,
+blocks 3494295..3528999, 2026-09-24 to 2026-10-24). Each of the 17,827 unshields of the last 14 days, scored against the
+entries (shields and moves) into its own pool in the 14 days before it:
 
 | verdict | unshields | share | meaning |
 |---|---|---|---|
-| NO MATCH | 828 | 57.5% | no shield of about that amount in the 14 days before (in this data) |
-| RED | 253 | 17.6% | exactly one earlier shield of about that amount in the 14 days before |
-| AMBER | 211 | 14.7% | a small crowd (more than one, fewer than ten) |
-| GREEN | 148 | 10.3% | a crowd of ten or more |
+| NO MATCH | 3,642 | 20.4% | no entry into that pool of about that amount in the 14 days before (in this data) |
+| RED | 1,405 | 7.9% | exactly one earlier entry of about that amount in the 14 days before |
+| AMBER | 2,561 | 14.4% | a small crowd (more than one, fewer than ten) |
+| GREEN | 10,219 | 57.3% | a crowd of ten or more |
 
-So for 17.6% of recent unshields an amount-matching observer has exactly one earlier shield to look at. This does not
+So for 7.9% of recent unshields an amount-matching observer has exactly one earlier entry to look at. This does not
 prove those two transactions belong to one person. It shows the size of the crowd an observer would face.
 Reproduce: `cargo run -p zcrowd -- report --data fixtures/flows-sample.ndjson` and open `report.html`
 (`tests/e2e.sh` asserts the RED and NO MATCH rows).
@@ -41,14 +43,27 @@ Real output:
 
 ```
 note: values given as arguments are visible in shell history and the process list; use the flag without a value (or `-`) to type it privately
-check: unshield (recipient gets this amount) 1.00000000 ZEC; fee allowance 50000 zat, tolerance 0 zat, lookback 30 days
-data: blocks 3494295..3528999 (2026-09-24 06:39 UTC .. 2026-10-24 13:05 UTC), 6227 events
-crowd: k=0 weighted=0.0 (earlier shields of about this amount, allowing for the fee; shields older than 14 days count half)
-verdict: NO MATCH - no shield of about this amount in the last 30 days; amount matching cannot tie this unshield to a shield in that window
+check: unshield (recipient gets this amount) 1.00000000 ZEC; pool any (worst of sapling, orchard, ironwood); fee allowance 50000 zat, tolerance 0 zat, lookback 30 days
+data: blocks 3494295..3528999 (2026-09-24 06:39 UTC .. 2026-10-24 13:05 UTC), 67965 events
+pool sapling: k=0 weighted=0.0 -> NO MATCH
+pool orchard: k=0 weighted=0.0 -> NO MATCH
+pool ironwood: k=162 weighted=112.0 -> GREEN
+crowd: k=162 weighted=112.0 (pool ironwood, the worst of the three: earlier shields and moves into it of about this amount, allowing for the fee; entries older than 14 days count half)
+other pools: 0 entries of about this amount went into the other pools: linkable only through a visible pool move; not counted
+matches (newest first, up to 10):
+  2026-10-24 05:23 UTC  7.7 h ago  1.00000000 ZEC  4cfce7c4bc883107e979f069d213f2780a305b355a0ce9818bc1cef9403c9fd5
+  2026-10-23 15:00 UTC  22.1 h ago  1.00000000 ZEC  74e2452adb96473fbf2014287b75eea2d19d32d6a0952b4ec78ded4658c93174
+  ... (8 more)
+verdict: GREEN - big crowd for amount + timing only, not "private"
+funds in another pool? use --pool for a precise answer
 Not checked: address reuse. Never unshield to an address you shielded from (add --to -).
-popular nearby amounts: none within 10% with a bigger crowd
-Covers amount + timing (+ address reuse with --to). Not covered: wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), z->z graph, cross-pool (Sapling<->Orchard) moves, off-chain records.
+Covers amount + timing within one pool (+ address reuse with --to). Not covered: wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), the z->z graph, links through pool moves beyond their amounts, off-chain records.
 ```
+
+The three pool lines are the point: an observer ties an unshield only to entries into the same pool. 1.0 ZEC has 162
+entries into Ironwood and none into Sapling or Orchard, so `--pool ironwood` says GREEN and `--pool sapling` says NO MATCH
+(nothing of that amount for an observer to match). With the default `any`, the single `verdict:` line is the worst of the
+three (RED, then AMBER, GREEN, NO MATCH), here GREEN.
 
 The sample data goes stale. It ends at 2026-10-24 13:05 UTC, and `check` warns when the newest block is more than two
 hours old, so when you run this later the output has extra `warning:` lines about missing recent shields. That is
@@ -61,8 +76,11 @@ cargo run -p zcrowd -- check --unshield --data fixtures/flows-sample.ndjson
 printf '%s\n%s\n' 1.2497 "$ADDRESS" | cargo run -p zcrowd -- check --unshield - --to - --data fixtures/flows-sample.ndjson
 ```
 
-Other flags: `--shield X` (planning to shield: how many other shields of about X will be your decoys later),
-`--tolerance-zat`, `--fee-allowance-zat`, `--lookback-days`, `--json`. `report` writes one self-contained HTML file.
+Other flags: `--pool sapling|orchard|ironwood|any` (the pool your funds are in, or will arrive in; the default `any`
+scores all three and prints the worst, see section 4), `--shield X` (planning to shield: X is the amount that arrives in
+the shielded pool, what you shield minus the fee, not what your wallet sends; the crowd is how many other entries of
+about X will be your decoys later), `--tolerance-zat`, `--fee-allowance-zat`, `--lookback-days`, `--json`. `report`
+writes one self-contained HTML file.
 `verify <txid>` re-decodes one cached raw transaction offline and compares it with the stored event.
 
 ## 3. Fresh data
@@ -71,13 +89,14 @@ Other flags: `--shield X` (planning to shield: how many other shields of about X
 cargo run -p zcrowd -- sync          # last 30 days, over Tor, from the first default lightwalletd server that answers; writes data/flows.ndjson and data/tx/
 ```
 
-Measured here (debug build, direct connection, before Tor was the default): a 30-day sync found 198,933 transactions in
-34,705 blocks, 6,227 of them crossed the turnstile; it took 140 s with 1,406 of those already cached (4,821 fetched). A
-completely cold run fetches all of them: its time was not measured (NOT VERIFIED). A 30-day sync over Tor was not
-measured either (NOT VERIFIED); a one-day sync took 20 to 40 s over Tor against 6.6 s direct (section 7). The raw
-transaction cache is about 80 MB for 30 days (measured: 6,227 files,
-76 MB of content, about 95 MB of disk with block rounding; the events file adds 1.5 MB). `sync` stops 10 blocks below
-the tip (reorg safety) and uses at most 8 parallel fetches. It takes its data from the first server that answers as
+Measured here (debug build, direct connection with `--no-tor`): a 30-day sync found 245,389 transactions in 34,705
+blocks; 67,977 of them crossed the turnstile or moved value between shielded pools, and 67,965 became events (the other 12
+are counted and skipped, section 4). Picking the candidates from the compact blocks took 14 s; fetching them took 34
+minutes in all (2,048 s, 61,750 fetched and 6,227 already cached; a completely cold run fetches all 67,977 and was not
+timed, NOT VERIFIED). A 30-day sync over Tor was not measured either (NOT VERIFIED); a one-day sync took 20 to 40 s over
+Tor against 6.6 s direct (section 7). The raw transaction cache is big: 1.4 GB for 30 days (measured: 67,977 files, 1.4 GB
+of content, 1.5 GB of disk with block rounding; the events file adds 17.7 MB). `sync` stops 10 blocks below the tip
+(reorg safety) and uses at most 8 parallel fetches. It takes its data from the first server that answers as
 mainnet (`--server`, repeatable; the default list is `zec.rocks`, `na.zec.rocks`, `eu.zec.rocks`).
 
 Run `sync` on a schedule, not right before you transact. By default it goes through Tor, so the server does not see
@@ -91,19 +110,34 @@ lightwalletd (public, TLS) --compact blocks--> candidates --full raw tx--> event
                                must chain         from the bytes
 ```
 
-1. `sync` asks the first server that answers for the compact blocks of the last N days and picks the transactions that cross the
-   turnstile: transparent inputs with shielded outputs (shield) or the reverse (unshield). It fetches each one in full,
-   recomputes its id from the bytes, and reads the exact net amount from the Sapling and Orchard value balances. Each
-   event stores time, height, kind, amount, pool, txid and the transparent addresses involved (all public on the chain).
-2. `check --unshield X` counts the crowd: earlier shields in the last 30 days whose amount is in `[X, X + 50,000 zat]`
-   (a "send max" round trip pays the fee out of the shielded note, so the recipient gets slightly less than was
-   shielded). Shields older than 14 days count half. `weighted` is that sum.
-3. Verdict: NO MATCH (k = 0), RED (weighted at most 1), AMBER (below 10), GREEN (10 or more). GREEN means a big crowd for
+1. `sync` asks the first server that answers for the compact blocks of the last N days (all four pool types:
+   transparent, Sapling, Orchard, Ironwood) and picks the transactions that cross the turnstile or move value between
+   shielded pools. It fetches each one in full, recomputes its id from the bytes, and reads the exact amount from the value
+   balance of each pool. The books must close (transparent in + value balances = transparent out + fee, fee at least 0);
+   a transaction that does not close is skipped and counted, never clamped. A transaction that puts value into one pool
+   from the transparent side (or from a coinbase) is a shield, one that takes value out of one pool to the transparent
+   side is an unshield, one that moves value from one pool into others with no transparent output is a move. Anything that
+   touches more pools than that (for example an unshield that pays out of Sapling and Orchard at once) is kept as low
+   confidence "multi-pool" and never counted in a crowd. Each event stores time, height, kind, amount, pool, txid and
+   the transparent addresses involved (all public on the chain).
+2. `check --unshield X` counts the crowd: earlier entries into your pool in the last 30 days (shields, moves from another
+   pool, shielded coinbase) whose amount is in `[X, X + 50,000 zat]` (a "send max" round trip pays the fee out of the
+   shielded note, so the recipient gets slightly less than was shielded). Entries older than 14 days count half.
+   `weighted` is that sum.
+3. Pools. Ironwood is the third shielded pool, added by NU6.3 (mainnet height 3,428,143). An observer who matches by
+   amount can tie an unshield from Ironwood only to something that went into Ironwood, so a crowd is the entries into
+   one pool (a visible move from another pool counts as an entry into the destination, by its amount). `--pool` names
+   yours. With the default `any`, `check` scores all three pools, prints one line per pool
+   (`pool ironwood: k=... weighted=... -> VERDICT`), shows the worst as the single `verdict:` and `crowd:` line, and adds
+   "funds in another pool? use --pool for a precise answer" and how many entries of about the same amount went into the
+   other pools (linkable only through a visible pool move; not counted).
+4. Verdict: NO MATCH (k = 0), RED (weighted at most 1), AMBER (below 10), GREEN (10 or more). GREEN means a big crowd for
    amount and timing only, not "private". An amount with five or more decimals is only a note ("easy to recognise
    later, round amounts blend in"), not a verdict driver.
-4. `--to ADDRESS` adds address reuse, the strongest real link: RED if that address shielded before, AMBER if it received
-   earlier unshields. The address is never written, logged or sent.
-5. For `--shield X` the crowd is other shields of about X (your later whole-note unshield hides among them).
+5. `--to ADDRESS` adds address reuse, the strongest real link: RED if that address shielded before (from any pool), AMBER
+   if it received earlier unshields. The address is never written, logged or sent.
+6. For `--shield X` the crowd is other entries into the pool of about X (your later whole-note unshield hides among
+   them); X is what arrives in the pool, not what your wallet sends.
 
 The adversary model is one sentence: an observer matches an unshield to earlier shields by amount, allowing for the fee,
 and weighs recent matches more. zcrowd measures this and only this.
@@ -111,12 +145,15 @@ and weighs recent matches more. zcrowd measures this and only this.
 ## 5. Real output: RED and GREEN
 
 RED (header and footer lines and part of the nearby list left out). 3.73 ZEC is an ordinary two-decimal amount, and
-only one shield of about that size happened in the 30 days of the sample (the sample holds no unshield of about that
-size, so this example shows no linked pair):
+only one entry of about that size went into any pool in the 30 days of the sample (the sample holds no unshield of about
+that size, so this example shows no linked pair):
 
 ```
 $ cargo run -p zcrowd -- check --unshield 3.73 --data fixtures/flows-sample.ndjson
-crowd: k=1 weighted=1.0 (earlier shields of about this amount, allowing for the fee; shields older than 14 days count half)
+pool sapling: k=1 weighted=1.0 -> RED
+pool orchard: k=0 weighted=0.0 -> NO MATCH
+pool ironwood: k=0 weighted=0.0 -> NO MATCH
+crowd: k=1 weighted=1.0 (pool sapling, the worst of the three: earlier shields and moves into it of about this amount, allowing for the fee; entries older than 14 days count half)
 matches (newest first, up to 10):
   2026-10-19 13:50 UTC  5.0 days ago  3.73000000 ZEC  6bdcbce819dd2b5a8e80126f7274d799af98d4d4d426c69b54e67eb4bd0e69b6
 verdict: RED - one match: if it is yours you are linked; if not, observers may wrongly link you to it
@@ -126,11 +163,16 @@ popular nearby amounts (within 10%, bigger crowd):
   do not send several chunks at the same time or to the same address; do not unshield the exact amount you shielded; waiting helps.
 ```
 
-GREEN (header and footer lines left out, and 7 of the 10 match lines):
+GREEN (header and footer lines left out, and 7 of the 10 match lines). Two pools have a crowd here and both are GREEN, so
+with `any` the single `crowd:` line is the smaller of the two (`--pool ironwood` gives k=592 weighted=437.0):
 
 ```
 $ printf '1.2497\n' | cargo run -p zcrowd -- check --unshield - --data fixtures/flows-sample.ndjson
-crowd: k=157 weighted=114.5 (earlier shields of about this amount, allowing for the fee; shields older than 14 days count half)
+pool sapling: k=157 weighted=114.5 -> GREEN
+pool orchard: k=0 weighted=0.0 -> NO MATCH
+pool ironwood: k=592 weighted=437.0 -> GREEN
+crowd: k=157 weighted=114.5 (pool sapling, the worst of the three: earlier shields and moves into it of about this amount, allowing for the fee; entries older than 14 days count half)
+other pools: 592 entries of about this amount went into the other pools: linkable only through a visible pool move; not counted
 matches (newest first, up to 10):
   2026-10-24 11:17 UTC  1.8 h ago  1.25000000 ZEC  2f77a813749805567311ae2f3993c63c050efba380f588010425a5890bfc3e47
   2026-10-24 07:32 UTC  5.6 h ago  1.25018331 ZEC  1b5e456ff6659ff015913b64a513d09aa5c2dc71d564aa01d63b2c351e5501dd
@@ -139,17 +181,22 @@ matches (newest first, up to 10):
 verdict: GREEN - big crowd for amount + timing only, not "private"
 ```
 
+A crowd in another pool is no cover (125 ZEC: `--pool sapling` finds 40 entries, `--pool ironwood` finds none and says
+NO MATCH). Nothing entered Orchard in this sample (no shield, no move), so `--pool orchard` says NO MATCH for every
+unshield amount.
+
 With an address that shielded earlier (taken from the sample), the overall verdict is the worst of amount and address:
 
 ```
 verdict: RED (worst of amount GREEN and address RED)
 amount: GREEN - big crowd for amount + timing only, not "private"
-address: RED - this address shielded on 2026-10-24 07:26 UTC; unshielding back to it links you directly, whatever the amount
+address: RED - this address shielded on 2026-09-24 06:40 UTC; unshielding back to it links you directly, whatever the amount
 ```
 
-Every `check` prints exactly one `verdict: ...` line and one `crowd: k=<n> weighted=<w>` line. `--json` has the same
-fields, with `verdict` the overall one (the worse of amount and address, so RED above, not the amount's GREEN), plus
-`amount_verdict` and `address_verdict`; it never contains the amount or address you typed.
+Every `check` prints exactly one `verdict: ...` line and one `crowd: k=<n> weighted=<w>` line (the pool lines start with
+`pool`). `--json` has the same fields, with `verdict` the overall one (the worse of amount and address, so RED above, not
+the amount's GREEN), plus `pool`, `pools` (one entry per scored pool), `other_pools_k`, `amount_verdict` and
+`address_verdict`; it never contains the amount or address you typed.
 
 ## 6. Library use in five lines
 
@@ -158,10 +205,10 @@ let data = std::path::Path::new("fixtures/flows-sample.ndjson");
 let events = read_ndjson(data)?;
 let now = read_coverage(data).unwrap().last_t; // the data's newest block time
 let p = Params { lookback_days: 30, tol_zat: 0, fee_allowance_zat: DEFAULT_FEE_ALLOWANCE, now };
-let c = score(&events, Kind::Unshield, parse_zec("1.2497")?, &p); // c.k, c.weighted, c.verdict, c.matches
+let c = score(&events, Kind::Unshield, Pool::Ironwood, parse_zec("1.2497")?, &p); // c.k, c.weighted, c.verdict, c.matches
 ```
 
-`cargo run -q -p zcrowd-core --example five_lines` runs the whole file and prints `crowd 157 -> GREEN`. `zcrowd-core`
+`cargo run -q -p zcrowd-core --example five_lines` runs the whole file and prints `crowd 592 -> GREEN`. `zcrowd-core`
 has no network code in the scoring path: a wallet can call `score` from its send screen.
 
 ## 7. Privacy: what leaves your machine
@@ -223,41 +270,56 @@ matters:
 1. `zcrowd verify <txid>` re-decodes a cached transaction offline; compare amount and time with a block explorer.
 2. Sync the same range from a second server (`--server https://eu.zec.rocks:443 --out other/flows.ndjson`) and compare
    the two files. On 2026-10-24 a one-day sync from `zec.rocks` and from `eu.zec.rocks` gave byte-identical files
-   (1,297 blocks, 173 events). Both names are under one domain and are probably one operator, so this is not an
-   independent check: for a real cross-check use a server run by someone else, or your own.
+   (1,297 blocks, 173 events; made before Ironwood was decoded and not repeated since). Both names are under one domain
+   and are probably one operator, so this is not an independent check: for a real cross-check use a server run by
+   someone else, or your own.
 3. Point `--server` at your own lightwalletd (`http://127.0.0.1:9067` is allowed, nothing else over plain text; add
    `--no-tor`, because Tor refuses local-only addresses).
 
 ## 9. Honest limits
 
-- It measures amount and timing only. Not covered: wallet and fee fingerprints, the IP address your wallet broadcasts
-  from (use Tor in your wallet), the shielded-to-shielded graph, moves between the Sapling and Orchard pools, off-chain
-  records (an exchange knows who you are).
+- It measures amount and timing only, inside one pool at a time. Not covered: wallet and fee fingerprints, the IP
+  address your wallet broadcasts from (use Tor in your wallet), the shielded-to-shielded graph, links through pool moves
+  beyond their amounts (a visible move from one pool to another counts as an entry into the destination, by its amount;
+  nothing more is inferred), off-chain records (an exchange knows who you are).
+- With `--pool any` (the default) the verdict is the worst of the three pools. If your funds sit in one pool, say which.
 - GREEN is not "private". NO MATCH is not "safe": it means no match in the data window (30 days by default). An earlier
   shield outside the window is not seen, and the report and `check` say so when the window is shorter than the lookback.
 - Address reuse is only checked with `--to`, against addresses seen in the window.
 - Fees are matched with a fixed allowance. If the fee taken from the shielded note is more than 50,000 zat, the
   matching shield is not found; `--fee-allowance-zat` widens the window.
-- Transactions are classified by their net crossing of the turnstile. Ambiguous ones (opposite signs in the two pools)
-  are marked low confidence and excluded from scores; `sync` prints how many transactions were left out and why.
-- The amounts, fees and addresses of the three fixture transactions were checked by hand against the Blockchair public
-  API on 2026-10-24; the 6,227 sample events were not checked one by one. The coinbase-to-shielded and cross-pool decode
-  paths have no real transaction behind them: none occurred in the 30 days of sample data.
+- Transactions are classified from the exact value balance of each pool (section 4). Ambiguous ones (they touch more
+  shielded pools than a plain shield, unshield or move) are kept as low confidence ("multi-pool") and excluded from
+  scores. Transactions whose books do not close, that cross nothing, or that move Sprout value are skipped. `sync`
+  prints how many of each and why. The server's pool support is not checked: `sync` fails only when a range of more
+  than 100 blocks returns no shield-like and no unshield-like transaction at all. A server that leaves out just one
+  pool (an old lightwalletd without Ironwood, say) while still sending the others would give a quiet-looking, incomplete
+  sample, and that is not detected (NOT VERIFIED).
+- The amounts, fees and addresses of the first three fixture transactions were checked by hand against the Blockchair
+  public API on 2026-10-24. Twenty events of the sample, picked across the kinds (four of them were wrong before Ironwood
+  was decoded), were compared with two public block explorers the same day; `crates/zcrowd-core/tests/sample.rs` holds
+  those 20 rows. The other 67,945 sample events were not checked one by one. One deliberate difference from an explorer:
+  when value enters one pool while another pool pays out, zcrowd counts what arrives in the pool, the explorer shows the
+  net crossing. The Ironwood-only and coinbase fixtures of `fixtures/raw/` were decoded but not compared with an explorer.
 
 ## 10. How it is verified
 
 ```
 bash tests/e2e.sh     # fmt, clippy -D warnings, all tests, the CLI on the fixtures, then the audit; prints E2E OK
 bash tests/audit.sh   # every privacy claim, one check each (docs/PRIVACY.md); prints AUDIT OK
-LIVE=1 bash tests/audit.sh   # also the live Tor leak check (real network; the whole audit took 41 to 54 s here)
+LIVE=1 bash tests/audit.sh   # also the live Tor leak check (real network; the whole audit took 161 s here)
 ```
 
-- 34 Rust tests: decode of real fixture transactions (shield, unshield, shield with transparent change) and address
-  shapes including TEX, scoring (send-max round
-  trip, NO MATCH, 12 shields GREEN, window and future exclusion, address reuse, widening never lowers k), amount parsing
-  (rejects `1e3`, `+1`, `1,5`, unicode digits, more than 8 decimals, 0, more than 21M), request independence, integrity
-  and chain-break handling, the sandbox, and four Tor tests (a Tor sync that cannot start never goes direct, flag
-  conflicts, the reorg margin of `--end-height`, a plain-text URL is refused before Tor starts).
+- 63 Rust tests: decode of real fixture transactions (shield, unshield, shield with transparent change, shields and
+  unshields that touch only Ironwood, a shielded coinbase, a move, unshields that leave two or three pools at once, the
+  transactions that cross nothing) and address shapes including TEX, unit tests of the sign convention, the books that
+  must close and the skips, the 20 explorer-checked events of the committed sample, scoring (send-max round trip, also
+  through more than 100 Ironwood shields of 200 blocks, NO MATCH, 12 shields GREEN, window and future exclusion, address
+  reuse, widening never lowers k, a crowd per pool, the worst pool and its ties, moves and shielded coinbase as entries),
+  amount parsing (rejects `1e3`, `+1`, `1,5`, unicode digits, more than 8 decimals, 0, more than 21M), request
+  independence, a long range without any candidate is an error, integrity and chain-break handling, the sandbox, and four
+  Tor tests (a Tor sync that cannot start never goes direct, flag conflicts, the reorg margin of `--end-height`, a
+  plain-text URL is refused before Tor starts).
 - Mutation checks while building: removing the txid check, the previous-hash check, the end-of-range check, trusting the
   cache, or caching a bad transaction each makes a test fail.
 - `AUDIT OK` with one headless-browser step needs `PLAYWRIGHT_CORE=<playwright-core dir>` and a Chromium binary; without
@@ -267,8 +329,9 @@ LIVE=1 bash tests/audit.sh   # also the live Tor leak check (real network; the w
 
 `web/index.html` is one self-contained file (data, code and style inline, no libraries, no WASM). Open it from disk or
 host it as a static file. It says on the page: "This page cannot send anything: its Content-Security-Policy blocks all
-network requests. Check DevTools > Network." It gives the same answers as the CLI (160 comparisons, `node
-web/test/parity.mjs`). It has no `--to` address check; use the CLI. Rebuild with `node web/build.mjs`. Tested in headless
+network requests. Check DevTools > Network." It gives the same answers as the CLI (760 comparisons, `node
+web/test/parity.mjs`, a minute or two). It has a "Pool your funds are in" menu (the default "Not sure" scores all three pools
+and shows the worst). It has no `--to` address check; use the CLI. Rebuild with `node web/build.mjs`. Tested in headless
 Chromium (from `http://` and `file://`); Firefox and Safari are NOT VERIFIED.
 
 ## 12. Dependencies, licence, roadmap
@@ -280,15 +343,15 @@ the tree went from 248 to 525 crate versions), `zcash_primitives` / `zcash_trans
 
 Track: CORE & TOOLING. This is plumbing for wallet and SDK authors: a small library (`zcrowd-core`) and an indexer-fed
 tool that answer one question that wallets currently cannot. Roadmap: a wallet-side hook that warns on the send
-screen, pool-aware scoring.
+screen.
 
 ## NOT VERIFIED
 
 `sync` over Tor on macOS and Windows, on networks that block Tor, for a 30-day range, and from servers other than
 `zec.rocks`; the cause of one hang in an early Tor sync (seen once, not reproduced in more than
 20 later runs; the 60 s idle limit on the block stream was added after it and is not verified to cure it); macOS and
-Windows; Firefox and Safari for the web demo; release-build performance; the
-coinbase-to-shielded and cross-pool decode paths on real transactions; P2SH input-address detection beyond the sources
-seen in the sample; independence of the public servers; the time of a completely cold 30-day sync; packet-level network
+Windows; Firefox and Safari for the web demo; release-build performance; whether the server
+sends every pool (one that leaves out a single pool is not detected, section 9); the amounts of the Ironwood-only and
+coinbase fixtures against an explorer; P2SH input-address detection beyond the sources seen in the sample; independence of the public servers; the time of a completely cold 30-day sync; packet-level network
 behaviour of `sync` (the leak-check interposer sees libc calls, not raw system calls; a direct sync was sampled once with
 `ss`: only the chosen server and the DNS resolver were seen).

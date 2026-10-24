@@ -40,7 +40,8 @@ pub fn render(evs: &[Event]) -> String {
         if e.kind == Kind::Shield { hist[i].0 += 1 } else { hist[i].1 += 1 }
     }
     let max = hist.iter().map(|h| h.0.max(h.1)).max().unwrap_or(1).max(1) as f64;
-    let mut svg = String::from("<svg viewBox=\"0 0 560 220\" width=\"560\" height=\"220\" role=\"img\" aria-label=\"events per amount bucket\">");
+    let mut svg =
+        String::from("<svg viewBox=\"0 0 560 220\" width=\"560\" height=\"220\" role=\"img\" aria-label=\"events per amount bucket\">");
     for (i, (b, h)) in BUCKETS.iter().zip(&hist).enumerate() {
         let x = 20 + i * 76;
         let (hs, hu) = (h.0 as f64 / max * 150.0, h.1 as f64 / max * 150.0);
@@ -49,7 +50,14 @@ pub fn render(evs: &[Event]) -> String {
             "<rect x=\"{x}\" y=\"{:.0}\" width=\"30\" height=\"{hs:.0}\" fill=\"#2a6\"><title>{} shields {}</title></rect>\
              <rect x=\"{}\" y=\"{:.0}\" width=\"30\" height=\"{hu:.0}\" fill=\"#c52\"><title>{} unshields {}</title></rect>\
              <text x=\"{x}\" y=\"195\" font-size=\"11\">{}</text>",
-            175.0 - hs, b.0, h.0, x + 32, 175.0 - hu, b.0, h.1, b.0
+            175.0 - hs,
+            b.0,
+            h.0,
+            x + 32,
+            175.0 - hu,
+            b.0,
+            h.1,
+            b.0
         );
     }
     svg.push_str("<text x=\"20\" y=\"214\" font-size=\"11\">green = shields, red = unshields; amount in ZEC</text></svg>");

@@ -138,10 +138,11 @@ pub fn sig_decimals(zat: u64) -> usize {
 
 pub fn read_ndjson(path: &std::path::Path) -> Result<Vec<Event>> {
     let text = std::fs::read_to_string(path)?;
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| Ok(serde_json::from_str(l)?))
-        .collect()
+    text.lines().filter(|l| !l.trim().is_empty()).map(|l| Ok(serde_json::from_str(l)?)).collect()
+}
+
+pub fn coinbase_tag(e: &Event) -> String {
+    if e.coinbase { " (coinbase)".into() } else { String::new() }
 }
 
 pub fn read_coverage(data: &std::path::Path) -> Option<Coverage> {
@@ -180,4 +181,3 @@ mod tests {
         assert_eq!(sig_decimals(parse_zec("1.23456789").unwrap()), 8);
     }
 }
-

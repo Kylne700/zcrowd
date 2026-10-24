@@ -60,3 +60,24 @@ fn decode_input_address_shapes() {
     // Truncated push: no address, no panic.
     assert_eq!(input_address(&[0x4b, 1, 2]), None);
 }
+
+#[test]
+fn decode_canonical_taddr() {
+    use zcrowd_core::decode::canonical_taddr;
+    let a = "t1XQZdZMnzXBcL8yx2PR27dSNrqctgwLgux";
+    assert_eq!(canonical_taddr(a).unwrap(), a);
+    assert_eq!(canonical_taddr(&format!("  {a}\n")).unwrap(), a);
+    assert!(canonical_taddr("not an address").is_err());
+    assert!(canonical_taddr("u1abc").is_err());
+}
+
+#[test]
+fn decode_tex_maps_to_its_p2pkh() {
+    use zcash_address::{ToAddress, ZcashAddress};
+    use zcash_protocol::consensus::NetworkType;
+    let tex = ZcashAddress::from_tex(NetworkType::Main, [7u8; 20]).to_string();
+    assert!(tex.starts_with("tex1"));
+    assert_eq!(zcrowd_core::decode::canonical_taddr(&tex).unwrap(), zcrowd_core::decode::p2pkh([7u8; 20]));
+    let test = ZcashAddress::from_transparent_p2pkh(NetworkType::Test, [7u8; 20]).to_string();
+    assert!(zcrowd_core::decode::canonical_taddr(&test).is_err());
+}

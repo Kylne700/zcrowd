@@ -122,7 +122,11 @@ pub async fn resolve<S: BlockSource>(src: &S, cands: &[Cand], cache: &RawCache, 
     let mut r = Resolved::default();
     while let Some(x) = results.next().await {
         let (d, cached) = x?;
-        if cached { r.from_cache += 1 } else { r.fetched += 1 }
+        if cached {
+            r.from_cache += 1
+        } else {
+            r.fetched += 1
+        }
         match d {
             Some(Decoded::Event(e)) => r.events.push(e),
             Some(Decoded::Skip(s)) => *r.skipped.entry(s.label()).or_default() += 1,

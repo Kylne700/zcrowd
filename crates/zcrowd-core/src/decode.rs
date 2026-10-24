@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use zcash_address::{ToAddress, ZcashAddress};
+use zcash_address::{ConversionError, ToAddress, TryFromAddress, ZcashAddress};
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::consensus::{BlockHeight, BranchId, MainNetwork, NetworkType};
 use zcash_transparent::address::TransparentAddress;
@@ -147,4 +147,31 @@ pub fn event_from_tx(raw: &[u8], height: u64, time: u64) -> Result<Decoded> {
         src,
         dst,
     }))
+}
+
+struct Taddr(String);
+
+fn mainnet(net: NetworkType, a: [u8; 20], f: fn([u8; 20]) -> String) -> Result<Taddr, ConversionError<&'static str>> {
+    if net == NetworkType::Main { Ok(Taddr(f(a))) } else { Err(ConversionError::User("not a mainnet address")) }
+}
+
+impl TryFromAddress for Taddr {
+    type Error = &'static str;
+    fn try_from_transparent_p2pkh(net: NetworkType, data: [u8; 20]) -> Result<Self, ConversionError<Self::Error>> {
+        mainnet(net, data, p2pkh)
+    }
+    fn try_from_transparent_p2sh(net: NetworkType, data: [u8; 20]) -> Result<Self, ConversionError<Self::Error>> {
+        mainnet(net, data, p2sh)
+    }
+    // ZIP-320 TEX addresses encode the same hash as a P2PKH address.
+    fn try_from_tex(net: NetworkType, data: [u8; 20]) -> Result<Self, ConversionError<Self::Error>> {
+        mainnet(net, data, p2pkh)
+    }
+}
+
+/// Canonical mainnet t1/t3 form of a transparent address (tex1 maps to its P2PKH hash). Shielded or
+/// non-mainnet addresses are rejected: zcrowd only compares transparent addresses.
+pub fn canonical_taddr(s: &str) -> Result<String> {
+    let a = ZcashAddress::try_from_encoded(s.trim()).map_err(|_| anyhow::anyhow!("not a Zcash address"))?;
+    a.convert::<Taddr>().map(|t| t.0).map_err(|_| anyhow::anyhow!("need a mainnet transparent address (t1..., t3... or tex1...)"))
 }

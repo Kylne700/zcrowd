@@ -91,6 +91,8 @@ async fn go<S: BlockSource>(s: &S, days: u64, out: &Path, candidates_only: bool,
         if skipped.is_empty() { "none".into() } else { skipped.join(" ") }
     );
     println!("wrote {} (raw transactions cached in {})", out.display(), cache.0.display());
-    println!("tip: sync on a schedule, not right before you transact. The server sees your IP and that you run zcrowd, nothing about your wallet; use Tor or a VPN at system level.");
+    println!(
+        "tip: sync on a schedule, not right before you transact. The server sees your IP and that you run zcrowd, nothing about your wallet; use Tor or a VPN at system level."
+    );
     Ok(())
 }

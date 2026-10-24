@@ -1,23 +1,38 @@
-use crate::crowd::{Crowd, Params, score};
+use crate::crowd::{Params, Verdict, count, verdict_for};
 use crate::model::{Confidence, Event, Kind};
 use std::collections::BTreeSet;
 
-/// Up to `n` amounts within +-10% of `zat` whose crowd is at least as big as the original, biggest first.
-pub fn popular(events: &[Event], user: Kind, zat: u64, p: &Params, n: usize) -> Vec<(u64, Crowd)> {
+#[derive(Clone, Debug)]
+pub struct Suggestion {
+    pub zat: u64,
+    pub k: usize,
+    pub weighted: f64,
+    pub verdict: Verdict,
+}
+
+/// Up to `n` amounts within +-10% of `zat` that have a bigger crowd than `zat` itself (and more than one
+/// match), biggest first; ties: closer to `zat`, then smaller amount. Scored with exactly the same
+/// window and weights as `crowd::score`, so a suggestion never promises more than the check shows.
+pub fn popular(events: &[Event], user: Kind, zat: u64, p: &Params, n: usize) -> Vec<Suggestion> {
     let (lo, hi) = (zat - zat / 10, zat + zat / 10);
-    let base = score(events, user, zat, p).weighted;
+    let base = count(events, user, zat, p).1.max(1.0);
+    // Candidates are amounts that shields actually used inside the lookback window.
+    let from = p.now.saturating_sub(p.lookback_days * crate::crowd::DAY);
     let cands: BTreeSet<u64> = events
         .iter()
-        .filter(|e| e.kind == user.opposite() && e.confidence == Confidence::High && (lo..=hi).contains(&e.zat))
+        .filter(|e| e.kind == Kind::Shield && e.confidence == Confidence::High && e.t <= p.now && e.t >= from)
         .map(|e| e.zat)
+        .filter(|z| (lo..=hi).contains(z) && *z != zat)
         .collect();
-    let mut out: Vec<(u64, Crowd)> = cands
+    let mut out: Vec<Suggestion> = cands
         .into_iter()
-        .filter(|&a| a != zat)
-        .map(|a| (a, score(events, user, a, p)))
-        .filter(|(_, c)| !c.odd_amount && c.weighted >= base)
+        .map(|a| {
+            let (k, weighted) = count(events, user, a, p);
+            Suggestion { zat: a, k, weighted, verdict: verdict_for(user, k, weighted) }
+        })
+        .filter(|s| s.weighted > base)
         .collect();
-    out.sort_by(|a, b| b.1.weighted.total_cmp(&a.1.weighted).then(a.0.abs_diff(zat).cmp(&b.0.abs_diff(zat))));
+    out.sort_by(|a, b| b.weighted.total_cmp(&a.weighted).then(a.zat.abs_diff(zat).cmp(&b.zat.abs_diff(zat))).then(a.zat.cmp(&b.zat)));
     out.truncate(n);
     out
 }
@@ -25,17 +40,39 @@ pub fn popular(events: &[Event], user: Kind, zat: u64, p: &Params, n: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crowd::DEFAULT_FEE_ALLOWANCE;
     use crate::model::{Pool, ZAT_PER_ZEC};
+
+    fn sh(zat: u64, i: u64) -> Event {
+        Event {
+            h: 1,
+            t: 1000 + i,
+            kind: Kind::Shield,
+            zat,
+            pool: Pool::Orchard,
+            fee_zat: None,
+            n_tin: 1,
+            n_tout: 0,
+            txid: format!("{zat}-{i}"),
+            confidence: Confidence::High,
+            coinbase: false,
+            src: vec![],
+            dst: vec![],
+        }
+    }
+
     #[test]
-    fn suggestions_not_smaller() {
-        let mk = |zat, i: u64| Event { h: 1, t: 1000 + i, kind: Kind::Shield, zat, pool: Pool::Orchard, fee_zat: None, n_tin: 1, n_tout: 0, txid: format!("{zat}{i}"), confidence: Confidence::High, coinbase: false, src: vec![], dst: vec![] };
-        let mut evs: Vec<Event> = (0..20).map(|i| mk(ZAT_PER_ZEC, i)).collect();
-        evs.extend((0..3).map(|i| mk(ZAT_PER_ZEC * 105 / 100, i)));
-        let p = Params { lookback_days: 30, tol_zat: 0, now: 5000 };
-        let x = ZAT_PER_ZEC * 102 / 100;
-        let base = score(&evs, Kind::Unshield, x, &p).weighted;
-        let s = popular(&evs, Kind::Unshield, x, &p, 5);
-        assert!(!s.is_empty() && s.iter().all(|(_, c)| c.weighted >= base));
-        assert_eq!(s[0].0, ZAT_PER_ZEC);
+    fn suggestions_not_smaller_and_ordered() {
+        let mut evs: Vec<Event> = (0..20).map(|i| sh(ZAT_PER_ZEC, i)).collect();
+        evs.extend((0..3).map(|i| sh(ZAT_PER_ZEC * 105 / 100, i)));
+        for user in [Kind::Unshield, Kind::Shield] {
+            let p = Params { lookback_days: 30, tol_zat: 0, fee_allowance_zat: DEFAULT_FEE_ALLOWANCE, now: 5000 };
+            let x = ZAT_PER_ZEC * 102 / 100;
+            let base = count(&evs, user, x, &p).1;
+            let s = popular(&evs, user, x, &p, 5);
+            assert!(!s.is_empty() && s.iter().all(|c| c.weighted >= base));
+            assert_eq!(s[0].zat, ZAT_PER_ZEC);
+            assert!(s.windows(2).all(|w| w[0].weighted >= w[1].weighted));
+        }
     }
 }

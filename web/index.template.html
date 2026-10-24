@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" translate="no">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
@@ -22,14 +22,19 @@
   code, .num { font-family: ui-monospace, monospace; }
   button { cursor: pointer; margin: .15rem .15rem 0 0; }
   [hidden] { display: none !important; }
+  :focus-visible { outline: 3px solid #0550ae; outline-offset: 2px; }
+  ::placeholder { color: #57606a; opacity: 1; }
+  select { max-width: 100%; }
 </style>
 </head>
 <body>
 <h1>zcrowd</h1>
 <p>Before you move Zcash between a transparent and a shielded address, see how many earlier transactions look like yours. Pick a direction and a shielded pool, type an amount. Runs entirely in this page, on a frozen sample of public mainnet data.</p>
+<p class="small" id="snapshot"></p>
 
 <p class="box" id="cannot-send"><b>This page cannot send anything: its Content-Security-Policy blocks all network requests. Check DevTools &gt; Network.</b><br>
 <span class="small">Your amount is not stored and not put in the URL.</span></p>
+<p class="small" id="limits"><b>What this page cannot protect.</b> If you opened it from GitHub Pages, GitHub sees your IP address like any website you visit, but never your amount: the amount stays in this page. Browser extensions can read any page you open, including what you type here, so the strongest option is the command line tool, or this file downloaded and opened offline in a private window with extensions turned off.</p>
 
 <label for="mode">I plan to</label>
 <select id="mode" autocomplete="off">
@@ -46,7 +51,7 @@
 </select>
 
 <label for="amount" id="amount-label">Amount in ZEC</label>
-<input id="amount" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="for example 1.2497">
+<input id="amount" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" translate="no" placeholder="for example 1.2497">
 <div class="hint" id="amount-hint"></div>
 
 <div>
@@ -57,11 +62,11 @@
 <details>
   <summary class="small">Advanced</summary>
   <label for="tol">Tolerance (zatoshi, 1 ZEC = 100000000)</label>
-  <input id="tol" type="text" inputmode="numeric" autocomplete="off" value="0">
+  <input id="tol" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" translate="no" value="0">
   <label for="fee">Fee allowance (zatoshi, unshield only)</label>
-  <input id="fee" type="text" inputmode="numeric" autocomplete="off" value="50000">
+  <input id="fee" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" translate="no" value="50000">
   <label for="look">Lookback (days)</label>
-  <input id="look" type="text" inputmode="numeric" autocomplete="off" value="30">
+  <input id="look" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" translate="no" value="30">
 </details>
 
 <div id="res" aria-live="polite">
@@ -111,7 +116,8 @@ const fmtAge = (s) => (s >= 2 * DAY ? (s / DAY).toFixed(1) + " days" : (s / 3600
 
 // DATA.s = [[unix time, zatoshi, pool index]] of every high-confidence entry into a shielded pool in the sample: a shield
 // (transparent in, shielded out) or a move from another pool. Pool index: 0 sapling, 1 orchard, 2 ironwood.
-const POOLS = ["sapling", "orchard", "ironwood"], ENTRIES = DATA.s, NOW = DATA.cov.last_t;
+// web/build.mjs sorts it newest first, ties by txid (as crowd.rs does); the position in it is the rank that orders the matches.
+const POOLS = ["sapling", "orchard", "ironwood"], ENTRIES = DATA.s.map(([t, z, pool], rank) => [t, z, pool, rank]), NOW = DATA.cov.last_t;
 // sorted by amount, so `count` looks only at the entries inside the amount window (a month of Ironwood is 25,000 entries)
 const BY_POOL = POOLS.map((_, i) => ENTRIES.filter((e) => e[2] === i).sort((a, b) => a[1] - b[1]));
 const DEFAULTS = { lookback: 30, tol: 0, fee: 50000, now: NOW };
@@ -156,7 +162,7 @@ function check(mode, zat, p, pool = "any") {
   const pools = POOLS.map((name, i) => { const [k, weighted] = count(mode, i, zat, p); return { pool: name, k, weighted, verdict: verdictFor(mode, k, weighted) }; });
   const c = pool === "any" ? worst(pools) : pools[POOLS.indexOf(pool)];
   const i = POOLS.indexOf(c.pool);
-  const matches = BY_POOL[i].filter(([t, z]) => inScope(mode, zat, p, t, z)).sort((a, b) => b[0] - a[0]).slice(0, 10).map(([t, z]) => ({ t, zat: z }));
+  const matches = BY_POOL[i].filter(([t, z]) => inScope(mode, zat, p, t, z)).sort((a, b) => b[0] - a[0] || a[3] - b[3]).slice(0, 10).map(([t, z, , rank]) => ({ t, zat: z, rank }));
   return {
     pool: c.pool, k: c.k, weighted: c.weighted, verdict: c.verdict, odd_amount: sigDecimals(zat) >= 5, matches, pools,
     other_pools_k: pools.reduce((n, o) => n + (o.pool === c.pool ? 0 : o.k), 0),
@@ -213,6 +219,7 @@ if (typeof document !== "undefined") {
     put($("pool-note"), r.other_pools_k + " entries of about this amount went into the other pools: linkable only through a visible pool move; not counted." + (pool === "any" ? " Funds in another pool? Choose the pool above for a precise answer." : ""));
     const notes = [];
     if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
+    if (r.verdict === "NO MATCH" || r.verdict === "RED") notes.push("Note: shields after " + fmtUtc(c.last_t) + " (last synced block) are not counted.");
     if (c.last_t - c.first_t + 6 * 3600 < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: an entry of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
     put($("note"), notes.join(" "));
     $("matches").replaceChildren(); $("sugg").replaceChildren();
@@ -251,6 +258,8 @@ if (typeof document !== "undefined") {
     });
   }
   const c0 = DATA.cov;
+  const days = Math.max(0, Math.floor((Date.now() / 1000 - c0.last_t) / DAY));
+  put($("snapshot"), "Data snapshot of " + fmtUtc(c0.last_t).slice(0, 10) + ", " + days + (days === 1 ? " day" : " days") + " old; the CLI syncs live data.");
   put($("cov"), "Sample: " + ENTRIES.length + " entries into a shielded pool (" + POOLS.map((n, i) => BY_POOL[i].length + " " + n).join(", ") + "; shields and moves from another pool) from public Zcash mainnet data, blocks " + c0.first_h + ".." + c0.last_h + " (" + fmtUtc(c0.first_t) + " .. " + fmtUtc(c0.last_t) + "). Ages are measured from the end of the sample; entries before " + fmtUtc(c0.first_t) + " are not counted.");
   run();
 }

@@ -8,10 +8,16 @@ const MARK = "/*__DATA__*/null";
 
 const POOLS = ["sapling", "orchard", "ironwood"]; // the index is the pool number the page script uses
 
-// Only what the scoring reads: time, amount and pool of every high-confidence entry into a pool (a shield or a move).
-// No txids, no addresses.
+// The events the page scores: high-confidence entries into a pool (a shield or a move), newest first and ties by txid, the
+// order crowd.rs lists its matches in. The page keeps each entry's position as its rank, so it picks the same ten as the CLI.
+export function pageEntries(events) {
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return events.filter((e) => (e.kind === "shield" || e.kind === "move") && e.confidence === "high" && POOLS.includes(e.pool)).sort((a, b) => b.t - a.t || cmp(a.txid, b.txid));
+}
+
+// Only what the scoring reads: time, amount and pool of each entry, in that order. No txids, no addresses.
 export function pageData(events, cov) {
-  const s = events.filter((e) => (e.kind === "shield" || e.kind === "move") && e.confidence === "high" && POOLS.includes(e.pool)).map((e) => [e.t, e.zat, POOLS.indexOf(e.pool)]);
+  const s = pageEntries(events).map((e) => [e.t, e.zat, POOLS.indexOf(e.pool)]);
   for (const [t, z] of s) if (!Number.isSafeInteger(t) || !Number.isSafeInteger(z) || z <= 0) throw new Error(`not a safe integer: ${t} ${z}`);
   return { cov, s };
 }

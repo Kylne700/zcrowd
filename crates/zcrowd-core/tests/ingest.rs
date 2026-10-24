@@ -121,6 +121,57 @@ async fn a_corrupt_cache_file_is_fetched_again_and_overwritten() {
     assert_eq!(cache.get(&c[1].txid).unwrap(), Some(src.raw_tx(&c[1].txid).await.unwrap().0));
 }
 
+/// A server that is slow to answer for one chosen transaction, and counts the transactions asked for.
+struct SlowOne<S> {
+    inner: S,
+    slow: String,
+    asked: std::sync::atomic::AtomicUsize,
+    asked_when_the_slow_one_answered: std::sync::atomic::AtomicUsize,
+}
+
+impl<S: BlockSource> BlockSource for SlowOne<S> {
+    async fn tip(&self) -> Result<u64> {
+        self.inner.tip().await
+    }
+    async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
+        self.inner.blocks(start, end).await
+    }
+    async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.asked.fetch_add(1, SeqCst);
+        if txid == self.slow {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            self.asked_when_the_slow_one_answered.store(self.asked.load(SeqCst), SeqCst);
+        }
+        self.inner.raw_tx(txid).await
+    }
+}
+
+// One slow answer holds no other request back. A fetch that kept its window in order stopped asking for new transactions
+// while the slow one was on its way (a window of eight shrank to the slow one), and a sync over Tor spent a fifth of
+// its time that way.
+#[tokio::test]
+async fn one_slow_answer_does_not_hold_back_the_other_requests() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let plain = fixtures();
+    let tip = plain.tip().await.unwrap();
+    let (c, _) = candidates(&plain, tip - 2000, tip - 10).await.unwrap();
+    assert!(c.len() > 2, "{} candidates", c.len());
+    let expected = resolve(&plain, &c, &cache("slow-a"), 2).await.unwrap();
+
+    let src = SlowOne {
+        inner: fixtures(),
+        slow: c[0].txid.clone(),
+        asked: Default::default(),
+        asked_when_the_slow_one_answered: Default::default(),
+    };
+    let r = resolve(&src, &c, &cache("slow-b"), 2).await.unwrap();
+    // every transaction was asked for before the first answered, and the events are the same, in the same order
+    assert_eq!(src.asked_when_the_slow_one_answered.load(SeqCst), c.len());
+    assert_eq!(r.events, expected.events);
+    assert!(r.events.len() > 1);
+}
+
 /// A chain of synthetic compact blocks, served like a server would (every height, linked by hashes).
 struct Chain(Vec<BlockSummary>);
 

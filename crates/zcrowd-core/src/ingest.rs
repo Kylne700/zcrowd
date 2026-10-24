@@ -252,10 +252,11 @@ pub struct Resolved {
 }
 
 /// Decode every candidate, `concurrency` at a time (capped at 8): from the raw cache when present,
-/// otherwise fetched from `src` and cached. Requests are made in candidate order.
+/// otherwise fetched from `src` and cached. Requests start in candidate order but finish in any order, so one slow
+/// answer holds up no other request (the window of eight used to stall behind it); the events come out in candidate order.
 pub async fn resolve<S: BlockSource>(src: &S, cands: &[Cand], cache: &RawCache, concurrency: usize) -> Result<Resolved> {
-    let mut results = stream::iter(cands)
-        .map(|c| async move {
+    let mut results = stream::iter(cands.iter().enumerate())
+        .map(|(i, c)| async move {
             // The server is not trusted: bytes count only if they hash to the id that was asked for.
             // A cached file gets the same test; one that fails, or cannot be read as hex at all, is fetched again
             // and overwritten.
@@ -276,17 +277,23 @@ pub async fn resolve<S: BlockSource>(src: &S, cands: &[Cand], cache: &RawCache, 
                 Ok(_) => Some(Decoded::Skip(Skip::TxidMismatch)),
                 Err(_) => None,
             };
-            anyhow::Ok((d, cached_hit))
+            anyhow::Ok((i, d, cached_hit))
         })
-        .buffered(concurrency.clamp(1, MAX_CONCURRENCY));
+        .buffer_unordered(concurrency.clamp(1, MAX_CONCURRENCY));
     let mut r = Resolved::default();
+    // The results arrive in any order and are put back in candidate order at the end (the events were all kept anyway).
+    let mut done = Vec::with_capacity(cands.len());
     while let Some(x) = results.next().await {
-        let (d, cached) = x?;
+        let (i, d, cached) = x?;
         if cached {
             r.from_cache += 1
         } else {
             r.fetched += 1
         }
+        done.push((i, d));
+    }
+    done.sort_unstable_by_key(|(i, _)| *i);
+    for (_, d) in done {
         match d {
             Some(Decoded::Event(e)) => r.events.push(e),
             Some(Decoded::Skip(s)) => *r.skipped.entry(s.label()).or_default() += 1,

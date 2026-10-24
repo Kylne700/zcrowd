@@ -109,12 +109,14 @@ pub struct Lwd {
     pub tor: bool,
 }
 
-/// Raw transactions are fetched over this many connections, each on a circuit of its own in Tor mode (one circuit set the
-/// pace of a whole sync: measured 96 to 358 KB/s across runs of the same range, and the transactions of the second half of
-/// a day are big enough, 200 KB, to be limited by it). In-flight requests are still limited to `--concurrency` in all.
+/// Raw transactions are fetched over this many connections, each on a circuit of its own in Tor mode. A sync runs at the
+/// pace of the circuit it got: one circuit gave 5.9, 11.3 and 16.3 transactions a second on the same one-day range, four
+/// gave 9.1, 10.8 and 14.0 at the same time. So several circuits make a steadier sync, not a faster one on average.
+/// In-flight requests are still limited to `--concurrency` in all.
 const CONNECTIONS: usize = 4;
-/// A connection older than this is replaced at its next use: S9b saw a circuit slow from 11 to 1.3 transactions a second
-/// after 35 minutes, and a fresh process fast again.
+/// A connection older than this is replaced at its next use, so that no circuit stays for a whole sync. S9b saw one process
+/// slow from 11 to 1.3 transactions a second after 35 minutes and a fresh process fast again; whether a circuit, a
+/// connection or the process was the cause was not found, so this is a guard, not a measured cure.
 const CONNECTION_MAX_AGE: Duration = Duration::from_secs(600);
 /// After a connection could not be made, none is tried for this long.
 const CONNECT_RETRY_AFTER: Duration = Duration::from_secs(30);

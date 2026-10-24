@@ -6842,6 +6842,8 @@ dependencies = [
  "rpassword",
  "serde_json",
  "tokio",
+ "zcash_address",
+ "zcash_protocol",
  "zcrowd-core",
 ]
 

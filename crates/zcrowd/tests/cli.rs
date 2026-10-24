@@ -143,6 +143,66 @@ fn cli_check_shield_mode_and_address_reuse() {
     assert!(out.is_empty());
 }
 
+/// A mainnet Unified Address with these receivers, as a string.
+fn unified_address(rev: zcash_address::unified::Revision, receivers: Vec<zcash_address::unified::Receiver>) -> String {
+    use zcash_address::unified::{Address, Encoding, Uitem};
+    use zcash_address::{ToAddress, ZcashAddress};
+    use zcash_protocol::consensus::NetworkType;
+    let ua = Address::try_from_items(rev, receivers.into_iter().map(Uitem::Data).collect()).unwrap();
+    ZcashAddress::from_unified(NetworkType::Main, ua).to_string()
+}
+
+// `--to` takes a Unified Address (ZIP 316) too: its transparent receiver is checked, the note says so, and neither the
+// Unified Address nor the transparent address inside it is printed back. One without a transparent receiver is no unshield.
+#[test]
+fn a_unified_address_is_checked_through_its_transparent_receiver_and_never_printed_back() {
+    use zcash_address::ToAddress;
+    use zcash_address::unified::{Receiver, Revision};
+    use zcash_protocol::consensus::NetworkType;
+    let a = zcrowd_core::decode::p2pkh([7u8; 20]);
+    let mut v: Vec<String> = (1..=12).map(|i| line("shield", 100_000_000, i, "")).collect();
+    v.push(line("shield", 500_000_000, 20, &format!(r#","src":["{a}"]"#)));
+    let d = data_file("cli-ua.ndjson", &v);
+    let f = d.to_str().unwrap();
+    let args = ["check", "--unshield", "-", "--to", "-", "--pool", "sapling", "--data", f];
+    let with_both = unified_address(Revision::R0, vec![Receiver::Sapling([1; 43]), Receiver::P2pkh([7; 20])]);
+    let t_only = unified_address(Revision::R2, vec![Receiver::P2pkh([7; 20])]);
+    for (ua, prefers_shielded) in [(&with_both, true), (&t_only, false)] {
+        let (ok, out, err) = run(&args, Some(&format!("1\n{ua}\n")));
+        contract(&out);
+        assert!(ok, "{err}");
+        // the shield source is found through the receiver: RED, as for the t1 address itself
+        assert!(out.contains("verdict: RED") && out.contains("address: RED") && out.contains("shielded on"), "{out}");
+        assert!(out.contains("note: --to is a Unified Address: its transparent receiver is checked"), "{out}");
+        assert_eq!(out.contains("Wallets prefer its shielded receiver (ZIP 316)"), prefers_shielded, "{out}");
+        assert!(!out.contains(ua.as_str()) && !out.contains(&a) && !err.contains(ua.as_str()), "{out}{err}");
+        let (_, js, _) = run(&[&args[..], &["--json"]].concat(), Some(&format!("1\n{ua}\n")));
+        assert!(js.contains(r#""address_verdict":"RED""#) && js.contains("note: --to is a Unified Address"), "{js}");
+        assert!(!js.contains(ua.as_str()) && !js.contains(&a), "{js}");
+    }
+    // a plain address carries no such note
+    let (_, out, _) = run(&args, Some(&format!("1\n{a}\n")));
+    assert!(out.contains("address: RED") && !out.contains("Unified Address"), "{out}");
+    // no transparent receiver: nothing to check, and the way out is said in words
+    for ua in [
+        unified_address(Revision::R0, vec![Receiver::Sapling([1; 43])]),
+        unified_address(Revision::R0, vec![Receiver::Orchard([2; 43]), Receiver::Sapling([1; 43])]),
+    ] {
+        let (ok, out, err) = run(&args, Some(&format!("1\n{ua}\n")));
+        assert!(!ok && out.is_empty(), "{out}");
+        assert!(err.contains("this Unified Address has no transparent receiver: sending to it does not leave the shielded pools"), "{err}");
+        assert!(!err.contains(ua.as_str()), "{err}");
+    }
+    // a TEX address may be written in capitals (ZIP 320, Bech32m); a t1 address may not
+    let tex = zcash_address::ZcashAddress::from_tex(NetworkType::Main, [7u8; 20]).to_string();
+    for t in [tex.clone(), tex.to_uppercase()] {
+        let (ok, out, err) = run(&args, Some(&format!("1\n{t}\n")));
+        assert!(ok && out.contains("address: RED") && !out.contains(&t), "{out}{err}");
+    }
+    let (ok, out, err) = run(&args, Some(&format!("1\n{}\n", a.to_uppercase())));
+    assert!(!ok && out.is_empty() && err.contains("not a Zcash address"), "{out}{err}");
+}
+
 // A crowd is the entries into ONE pool; `--pool any` (the default) shows every pool and the worst verdict.
 #[test]
 fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {

@@ -5,7 +5,7 @@ use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
 use zcrowd_core::Kind;
 use zcrowd_core::crowd::{AddrFinding, Crowd, DAY, Params, Verdict, address_check, score_pools, worse, worst};
-use zcrowd_core::decode::{canonical_taddr, hides_crossing};
+use zcrowd_core::decode::{Via, destination, hides_crossing};
 use zcrowd_core::model::{Event, coinbase_tag, fmt_utc, fmt_zec, load, parse_zec};
 use zcrowd_core::suggest::popular;
 
@@ -82,7 +82,7 @@ pub fn run(a: Args) -> Result<()> {
     };
     let zat = parse_zec(&take(val, prompt)?)?;
     let to = match a.to {
-        Some(t) => Some(canonical_taddr(&take(Some(t).filter(|t| t != "-"), "Destination address (not shown): ")?)?),
+        Some(t) => Some(destination(&take(Some(t).filter(|t| t != "-"), "Destination address (not shown): ")?)?),
         None => None,
     };
     let (events, meta) = load(&a.data)?;
@@ -95,7 +95,7 @@ pub fn run(a: Args) -> Result<()> {
     let crowds = score_pools(&events, user, zat, &p);
     let c = a.pool.pick(&crowds);
     let sugg = if matches!(c.verdict, Verdict::Green) { vec![] } else { popular(&events, user, c.pool, zat, &p, 5) };
-    let addr = to.as_deref().map(|t| address_check(&events, t, now));
+    let addr = to.as_ref().map(|d| address_check(&events, &d.taddr, now));
     let overall = addr.as_ref().map_or(c.verdict, |f| worse(c.verdict, addr_verdict(f)));
     // entries into the other pools: an observer reaches them only through a visible move between pools
     let elsewhere: usize = crowds.iter().filter(|o| o.pool != c.pool).map(|o| o.k).sum();
@@ -105,7 +105,8 @@ pub fn run(a: Args) -> Result<()> {
     let stale_secs = wall.saturating_sub(cov.last_t);
     let span = cov.last_t.saturating_sub(cov.first_t);
     let short_window = span < a.lookback_days.saturating_mul(DAY);
-    let mut notes: Vec<String> = skipped_line(&meta.skipped).into_iter().collect();
+    let mut notes: Vec<String> = to.iter().filter_map(|d| unified_note(d.via)).collect();
+    notes.extend(skipped_line(&meta.skipped));
     if stale_secs > STALE_SECS {
         notes.push(format!(
             "warning: the newest block in this data is {} old; shields since {} are not counted (run `zcrowd sync`)",
@@ -267,6 +268,19 @@ fn clock_warning(wall: u64, last_t: u64) -> Option<String> {
         ))
     } else {
         None
+    }
+}
+
+/// What `--to` meant when it was a Unified Address (ZIP 316: wallets pay the most preferred receiver they support, so a
+/// shielded receiver comes before the transparent one). Never repeats the address.
+fn unified_note(via: Via) -> Option<String> {
+    match via {
+        Via::Plain => None,
+        Via::Unified { shielded: false } => Some("note: --to is a Unified Address: its transparent receiver is checked".into()),
+        Via::Unified { shielded: true } => Some(
+            "note: --to is a Unified Address: its transparent receiver is checked. Wallets prefer its shielded receiver (ZIP 316), so a payment to this address normally stays in the shielded pools and is not an unshield"
+                .into(),
+        ),
     }
 }
 

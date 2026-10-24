@@ -134,6 +134,94 @@ fn decode_tex_maps_to_its_p2pkh() {
     assert!(zcrowd_core::decode::canonical_taddr(&test).is_err());
 }
 
+// ZIP 320 re-encodes a P2PKH address as Bech32m (BIP 350), which may be written in all capitals (QR codes); the Rust crate
+// alone refuses such a string. Base58 t1/t3 addresses are case-sensitive and must stay so.
+#[test]
+fn decode_tex_in_capitals_is_accepted_but_base58_and_mixed_case_are_not() {
+    use zcash_address::{ToAddress, ZcashAddress};
+    use zcash_protocol::consensus::NetworkType;
+    use zcrowd_core::decode::{canonical_taddr, p2pkh};
+    let tex = ZcashAddress::from_tex(NetworkType::Main, [7u8; 20]).to_string();
+    let want = p2pkh([7u8; 20]);
+    assert_eq!(canonical_taddr(&tex.to_uppercase()).unwrap(), want);
+    assert_eq!(canonical_taddr(&format!(" {}\n", tex.to_uppercase())).unwrap(), want);
+    // mixed case is not Bech32m
+    let mixed = format!("T{}", &tex[1..]);
+    assert!(canonical_taddr(&mixed).is_err(), "{mixed}");
+    let half: String = tex.chars().enumerate().map(|(i, c)| if i % 2 == 0 { c.to_ascii_uppercase() } else { c }).collect();
+    assert!(canonical_taddr(&half).is_err(), "{half}");
+    // a base58 address in capitals (or all lowercase) is another string and no address
+    let t1 = "t1XQZdZMnzXBcL8yx2PR27dSNrqctgwLgux";
+    assert!(canonical_taddr(&t1.to_uppercase()).is_err());
+    assert!(canonical_taddr(&t1.to_lowercase()).is_err());
+    assert!(canonical_taddr(&want.to_uppercase()).is_err());
+}
+
+fn unified(rev: unified::Revision, net: NetworkType, receivers: Vec<Receiver>) -> String {
+    let ua = unified::Address::try_from_items(rev, receivers.into_iter().map(Uitem::Data).collect()).unwrap();
+    ZcashAddress::from_unified(net, ua).to_string()
+}
+
+use zcash_address::unified::{self, Encoding, Receiver, Uitem};
+use zcash_address::{ToAddress, ZcashAddress};
+use zcash_protocol::consensus::NetworkType;
+
+// ZIP 316: a Unified Address holds one transparent receiver at most (P2PKH or P2SH) and the wallet pays the most preferred
+// receiver it supports (Orchard, Sapling, then transparent). `--to` checks the transparent receiver and says so.
+#[test]
+fn a_unified_address_is_checked_through_its_transparent_receiver() {
+    use zcrowd_core::decode::{Dest, Via, destination, p2pkh, p2sh};
+    let r0 = unified::Revision::R0;
+    // transparent next to a shielded receiver: the shielded one is what wallets prefer
+    for (t, want) in [(Receiver::P2pkh([7; 20]), p2pkh([7; 20])), (Receiver::P2sh([9; 20]), p2sh([9; 20]))] {
+        for shielded in [Receiver::Sapling([1; 43]), Receiver::Orchard([2; 43])] {
+            let ua = unified(r0, NetworkType::Main, vec![shielded, t.clone()]);
+            assert!(ua.starts_with("u1"), "{ua}");
+            assert_eq!(destination(&ua).unwrap(), Dest { taddr: want.clone(), via: Via::Unified { shielded: true } });
+            assert_eq!(destination(&format!("  {ua}\n")).unwrap().taddr, want);
+        }
+    }
+    // Revision 2 "tu" addresses may carry a transparent receiver and nothing else
+    let ua = unified(unified::Revision::R2, NetworkType::Main, vec![Receiver::P2pkh([7; 20])]);
+    assert!(ua.starts_with("tu1"), "{ua}");
+    assert_eq!(destination(&ua).unwrap(), Dest { taddr: p2pkh([7; 20]), via: Via::Unified { shielded: false } });
+    // plain addresses are plain
+    assert_eq!(destination(&p2pkh([7; 20])).unwrap().via, Via::Plain);
+}
+
+#[test]
+fn a_unified_address_without_a_transparent_receiver_says_it_does_not_leave_the_shielded_pools() {
+    use zcrowd_core::decode::{NO_TRANSPARENT_RECEIVER, destination};
+    assert_eq!(
+        NO_TRANSPARENT_RECEIVER,
+        "this Unified Address has no transparent receiver: sending to it does not leave the shielded pools"
+    );
+    let shielded_only = [
+        vec![Receiver::Sapling([1; 43])],
+        vec![Receiver::Orchard([2; 43])],
+        vec![Receiver::Orchard([2; 43]), Receiver::Sapling([1; 43])],
+        vec![Receiver::Orchard([2; 43]), Receiver::Unknown { typecode: 0x40, data: vec![5; 8] }],
+    ];
+    for receivers in shielded_only {
+        for rev in [unified::Revision::R0, unified::Revision::R2] {
+            let ua = unified(rev, NetworkType::Main, receivers.clone());
+            let e = destination(&ua).unwrap_err().to_string();
+            assert_eq!(e, NO_TRANSPARENT_RECEIVER, "{ua}");
+            assert!(!e.contains(&ua));
+        }
+    }
+    // a Unified Address of another network is no mainnet address, whatever it holds
+    for net in [NetworkType::Test, NetworkType::Regtest] {
+        let ua = unified(unified::Revision::R0, net, vec![Receiver::P2pkh([7; 20]), Receiver::Sapling([1; 43])]);
+        let e = destination(&ua).unwrap_err().to_string();
+        assert!(e.starts_with("need a mainnet transparent address"), "{e}");
+    }
+    // a damaged one is no address
+    let ua = unified(unified::Revision::R0, NetworkType::Main, vec![Receiver::P2pkh([7; 20]), Receiver::Sapling([1; 43])]);
+    let damaged = format!("{}q", &ua[..ua.len() - 1]);
+    assert_eq!(destination(&damaged).unwrap_err().to_string(), "not a Zcash address");
+}
+
 fn skip(txid: &str, h: u64) -> zcrowd_core::decode::Skip {
     match event_from_tx(&raw(txid), h, 1).unwrap() {
         Decoded::Skip(s) => s,

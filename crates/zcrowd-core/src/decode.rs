@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use zcash_address::unified::{self, Container, Receiver};
 use zcash_address::{ConversionError, ToAddress, TryFromAddress, ZcashAddress};
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::consensus::{BlockHeight, BranchId, MainNetwork, NetworkType};
@@ -221,13 +222,30 @@ pub fn event_from_tx(raw: &[u8], height: u64, time: u64) -> Result<Decoded> {
     }))
 }
 
-struct Taddr(String);
-
-fn mainnet(net: NetworkType, a: [u8; 20], f: fn([u8; 20]) -> String) -> Result<Taddr, ConversionError<&'static str>> {
-    if net == NetworkType::Main { Ok(Taddr(f(a))) } else { Err(ConversionError::User("not a mainnet address")) }
+/// How the address given to `--to` was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Via {
+    /// t1..., t3... or tex1...
+    Plain,
+    /// A Unified Address with a transparent receiver; `shielded` says whether it also has a shielded one.
+    Unified { shielded: bool },
 }
 
-impl TryFromAddress for Taddr {
+/// The transparent address to check, in its canonical t1/t3 form, and how it was given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dest {
+    pub taddr: String,
+    pub via: Via,
+}
+
+pub const NO_TRANSPARENT_RECEIVER: &str =
+    "this Unified Address has no transparent receiver: sending to it does not leave the shielded pools";
+
+fn mainnet(net: NetworkType, a: [u8; 20], f: fn([u8; 20]) -> String) -> Result<Dest, ConversionError<&'static str>> {
+    if net == NetworkType::Main { Ok(Dest { taddr: f(a), via: Via::Plain }) } else { Err(ConversionError::User("not a mainnet address")) }
+}
+
+impl TryFromAddress for Dest {
     type Error = &'static str;
     fn try_from_transparent_p2pkh(net: NetworkType, data: [u8; 20]) -> Result<Self, ConversionError<Self::Error>> {
         mainnet(net, data, p2pkh)
@@ -239,13 +257,51 @@ impl TryFromAddress for Taddr {
     fn try_from_tex(net: NetworkType, data: [u8; 20]) -> Result<Self, ConversionError<Self::Error>> {
         mainnet(net, data, p2pkh)
     }
+    // ZIP-316: a Unified Address holds at most one transparent receiver (P2PKH or P2SH, never both). Without one, a
+    // payment to it cannot leave the shielded pools.
+    fn try_from_unified(net: NetworkType, ua: unified::Address) -> Result<Self, ConversionError<Self::Error>> {
+        if net != NetworkType::Main {
+            return Err(ConversionError::User("not a mainnet address"));
+        }
+        let items = ua.items();
+        let shielded = items.iter().any(|r| matches!(r, Receiver::Orchard(_) | Receiver::Sapling(_)));
+        items
+            .iter()
+            .find_map(|r| match r {
+                Receiver::P2pkh(h) => Some(p2pkh(*h)),
+                Receiver::P2sh(h) => Some(p2sh(*h)),
+                _ => None,
+            })
+            .map(|taddr| Dest { taddr, via: Via::Unified { shielded } })
+            .ok_or(ConversionError::User(NO_TRANSPARENT_RECEIVER))
+    }
 }
 
-/// Canonical mainnet t1/t3 form of a transparent address (tex1 maps to its P2PKH hash). Shielded or
-/// non-mainnet addresses are rejected: zcrowd only compares transparent addresses.
+/// The transparent address behind what was typed after `--to`: a mainnet t1/t3/tex1 address (tex1 maps to its P2PKH hash,
+/// in all-lowercase or all-uppercase as Bech32m allows), or the transparent receiver of a mainnet Unified Address.
+/// Other shielded or non-mainnet addresses are rejected: zcrowd only compares transparent addresses.
+pub fn destination(s: &str) -> Result<Dest> {
+    let s = s.trim();
+    // Base58 t1/t3 addresses are case-sensitive and stay so; only a TEX address may be written in capitals.
+    let lower;
+    let s = if s.starts_with("TEX1") && !s.bytes().any(|b| b.is_ascii_lowercase()) {
+        lower = s.to_ascii_lowercase();
+        &lower
+    } else {
+        s
+    };
+    let a = ZcashAddress::try_from_encoded(s).map_err(|_| anyhow::anyhow!("not a Zcash address"))?;
+    a.convert::<Dest>().map_err(|e| match e {
+        ConversionError::User(NO_TRANSPARENT_RECEIVER) => anyhow::anyhow!(NO_TRANSPARENT_RECEIVER),
+        _ => anyhow::anyhow!(
+            "need a mainnet transparent address (t1..., t3... or tex1...) or a Unified Address (u1...) with a transparent receiver"
+        ),
+    })
+}
+
+/// `destination` without the note on how it was written.
 pub fn canonical_taddr(s: &str) -> Result<String> {
-    let a = ZcashAddress::try_from_encoded(s.trim()).map_err(|_| anyhow::anyhow!("not a Zcash address"))?;
-    a.convert::<Taddr>().map(|t| t.0).map_err(|_| anyhow::anyhow!("need a mainnet transparent address (t1..., t3... or tex1...)"))
+    destination(s).map(|d| d.taddr)
 }
 
 #[cfg(test)]

@@ -65,7 +65,8 @@ enum Cmd {
         /// Shielded pool your funds are in (or will arrive in). `any` scores all three and shows the worst.
         #[arg(long, value_enum, default_value_t = check::PoolArg::Any)]
         pool: check::PoolArg,
-        /// Transparent address you plan to unshield to (t1, t3 or tex1), or `-` to type it privately.
+        /// Address you plan to unshield to (t1, t3, tex1, or a Unified Address u1 whose transparent receiver is checked), or `-` to
+        /// type it privately.
         #[arg(long)]
         to: Option<String>,
         /// How far back an earlier shield still counts as a match, in days (1 to 3650).

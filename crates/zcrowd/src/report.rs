@@ -2,9 +2,9 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
-use zcrowd_core::Kind;
-use zcrowd_core::crowd::{DAY, DEFAULT_FEE_ALLOWANCE, Params, Verdict, score};
+use zcrowd_core::crowd::{DAY, DEFAULT_FEE_ALLOWANCE, Params, Verdict, bounds, score};
 use zcrowd_core::model::{Confidence, Coverage, Event, coverage_of, fmt_utc, fmt_zec, read_ndjson};
+use zcrowd_core::{Kind, Pool};
 
 const BUCKETS: [(&str, u64, u64); 7] = [
     ("<0.01", 0, 1_000_000),
@@ -29,12 +29,24 @@ pub fn run(out: &Path, data: &Path) -> Result<()> {
 /// moves) into its own pool before it.
 /// Counts in the order NO MATCH, RED, AMBER, GREEN.
 fn profile(evs: &[Event], last_t: u64) -> [usize; 4] {
+    // Entries per pool sorted by amount: an unshield then scores only the entries of about its own amount, so a month of
+    // data takes seconds instead of minutes. Same result as scoring against every event.
+    let mut by_pool: [Vec<Event>; 3] = Default::default();
+    for e in evs.iter().filter(|e| matches!(e.kind, Kind::Shield | Kind::Move)) {
+        if let Some(i) = Pool::SINGLE.iter().position(|p| *p == e.pool) {
+            by_pool[i].push(e.clone());
+        }
+    }
+    by_pool.iter_mut().for_each(|v| v.sort_by_key(|e| e.zat));
     let mut n = [0; 4];
     for e in evs.iter().filter(|e| e.kind == Kind::Unshield && e.t + 14 * DAY >= last_t) {
         let p = Params { lookback_days: 14, tol_zat: 0, fee_allowance_zat: DEFAULT_FEE_ALLOWANCE, now: e.t };
         // the recipient gets the pool amount minus the fee (the fee is unknown for a few: their pool amount is used)
         let x = e.zat.saturating_sub(e.fee_zat.unwrap_or(0)).max(1);
-        n[match score(evs, Kind::Unshield, e.pool, x, &p).verdict {
+        let (lo, hi) = bounds(Kind::Unshield, x, &p);
+        let all: &[Event] = Pool::SINGLE.iter().position(|q| *q == e.pool).map_or(&[], |i| &by_pool[i]);
+        let near = &all[all.partition_point(|c| c.zat < lo)..all.partition_point(|c| c.zat <= hi)];
+        n[match score(near, Kind::Unshield, e.pool, x, &p).verdict {
             Verdict::NoMatch => 0,
             Verdict::Red => 1,
             Verdict::Amber => 2,

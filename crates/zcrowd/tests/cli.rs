@@ -265,8 +265,10 @@ fn cli_check_pool_option_scores_one_pool_and_any_shows_the_worst() {
     assert!(!ok && err.contains("--pool"), "{err}");
 }
 
-// The process cuts its own network. A listener on loopback is reachable from this process
-// but not after the probe enters a fresh network namespace.
+// The process cuts its own network. A listener on loopback is reachable from this process but not from the probe once it
+// is in the sandbox. On Linux the seccomp layer answers first (the socket itself is refused: "Operation not permitted"; the
+// empty namespace alone would say "Network is unreachable"); on macOS the no-network profile. Windows has no sandbox.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn sandbox_blocks_connections() {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -277,35 +279,11 @@ fn sandbox_blocks_connections() {
     assert!(boxed.starts_with("blocked"), "{boxed} {err}");
 }
 
-/// The files `check`, `report` and `verify` must not be able to see over a network: they stop at a data file that is a FIFO
-/// nobody writes to, so what is left to look at is the namespace the process is in by then.
+/// `check`, `report` and `verify` each stop at a data file that is a FIFO nobody writes to, so what is left to look at is the
+/// process as it is by then: `held(pid)` must become true before that, or the data had its chance before the cut.
 #[cfg(target_os = "linux")]
-fn stops_in_its_own_network_namespace(args: &[&str]) -> Result<(), String> {
-    let own = std::fs::read_link("/proc/self/ns/net").map_err(|e| e.to_string())?;
-    let mut c = Command::new(BIN).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
-    let start = std::time::Instant::now();
-    let mut ok = false;
-    while start.elapsed() < std::time::Duration::from_secs(10) {
-        if c.try_wait().unwrap().is_some() {
-            break; // gone before it got to the data: whatever it says is in stderr
-        }
-        if std::fs::read_link(format!("/proc/{}/ns/net", c.id())).is_ok_and(|ns| ns != own) {
-            ok = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let _ = c.kill();
-    let err = String::from_utf8_lossy(&c.wait_with_output().unwrap().stderr).into_owned();
-    if ok { Ok(()) } else { Err(err) }
-}
-
-// `sandbox_blocks_connections` shows that entering the sandbox cuts the network; this shows that every command that must be
-// offline enters it: without `sandbox::enter()` in main, the process stays in this test's network namespace.
-#[cfg(target_os = "linux")]
-#[test]
-fn check_report_and_verify_each_leave_the_network_before_they_read_anything() {
-    let d = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sandbox-fifo");
+fn each_is_cut_off_before_its_data(dir: &str, what: &str, held: impl Fn(u32) -> bool) {
+    let d = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(dir);
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     let fifo = d.join("flows.ndjson");
@@ -319,10 +297,52 @@ fn check_report_and_verify_each_leave_the_network_before_they_read_anything() {
         ("verify", vec!["verify", &id, "--data", f]),
     ];
     for (name, args) in cases {
-        if let Err(err) = stops_in_its_own_network_namespace(&args) {
-            panic!("`zcrowd {name}` did not enter a network namespace of its own before reading its data: {err}");
+        let mut c = Command::new(BIN).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+        let start = std::time::Instant::now();
+        let mut ok = false;
+        while start.elapsed() < std::time::Duration::from_secs(10) {
+            if c.try_wait().unwrap().is_some() {
+                break; // gone before it got to the data: whatever it says is in stderr
+            }
+            if held(c.id()) {
+                ok = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        let _ = c.kill();
+        let err = String::from_utf8_lossy(&c.wait_with_output().unwrap().stderr).into_owned();
+        assert!(ok, "`zcrowd {name}` did not {what} before reading its data: {err}");
     }
+}
+
+// `sandbox_blocks_connections` shows that entering the sandbox cuts the network; this shows that every command that must be
+// offline enters its namespace layer: without `sandbox::enter()` in main, the process stays in this test's network
+// namespace. It needs user namespaces (refused on a default Ubuntu 24.04; the seccomp test below holds there).
+#[cfg(target_os = "linux")]
+#[test]
+fn check_report_and_verify_each_leave_the_network_before_they_read_anything() {
+    let own = std::fs::read_link("/proc/self/ns/net").unwrap();
+    each_is_cut_off_before_its_data("sandbox-fifo", "enter a network namespace of its own", |pid| {
+        std::fs::read_link(format!("/proc/{pid}/ns/net")).is_ok_and(|ns| ns != own)
+    });
+}
+
+// The seccomp layer, also where the namespace works (as here): each command has one seccomp filter more than this test by
+// the time it waits for its data. Without it in `sandbox::enter()`, or if it were only a fallback, the count stays.
+#[cfg(all(
+    target_os = "linux",
+    target_pointer_width = "64",
+    any(target_arch = "x86_64", all(target_arch = "aarch64", target_endian = "little"))
+))]
+#[test]
+fn check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything() {
+    let filters = |pid: &str| -> Option<u32> {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        status.lines().find_map(|l| l.strip_prefix("Seccomp_filters:"))?.trim().parse().ok()
+    };
+    let own = filters("self").expect("Seccomp_filters in /proc/self/status (Linux 5.9 or later)");
+    each_is_cut_off_before_its_data("seccomp-fifo", "install the seccomp filter", |pid| filters(&pid.to_string()) == Some(own + 1));
 }
 
 const FIXTURE_TX: &str = "954c19b2c73e667170c28b8d3a94fd96582cba736a5ed7275a10fc0c3e64e149";

@@ -52,6 +52,10 @@ fi
 ok "P2 check.rs, report.rs and verify.rs import no network code (no source, tonic, tokio, std::net, Lwd, sockets)"
 must_pass "P2 sandbox test" cargo test -q -p zcrowd --test cli sandbox_blocks_connections
 ok "P2 the process cuts its own network: a loopback connection works before and fails after (test sandbox_blocks_connections)"
+must_pass "P2 seccomp tests" cargo test -q -p zcrowd --bin zcrowd sandbox::tests::
+ok "P2 the seccomp filter refuses TCP, UDP, Unix sockets, socketpair, io_uring and other ABIs, through enter() and alone (tests sandbox::tests::*)"
+must_pass "P2 seccomp before the data" cargo test -q -p zcrowd --test cli check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything
+ok "P2 check, report and verify each install the seccomp filter before they read their data (test check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything)"
 
 # P3: what you type is never written. Static part: only sync, report, the raw cache and the Tor state directory write files.
 W=$(git grep -lE 'fs::write|File::create|OpenOptions|create_dir|DirBuilder|fs::rename|fs::copy|fs::remove' -- 'crates/*/src/*.rs' | sort | tr '\n' ' ')

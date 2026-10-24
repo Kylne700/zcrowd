@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zcrowd: how big a crowd does your Zcash amount hide in?</title>
+<link rel="icon" href="data:,">
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 1.5rem auto; padding: 0 1rem; color: #1f2328; background: #fff; }
+  h1 { margin: 0 0 .25rem; }
+  h2 { font-size: 1.05rem; margin: 1.25rem 0 .25rem; }
+  .box { border: 2px solid #1f2328; padding: .6rem .8rem; margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-top: .75rem; }
+  input, select, button { font: inherit; padding: .35rem .5rem; }
+  input[type=text] { width: 100%; box-sizing: border-box; }
+  .hint, .small { color: #57606a; font-size: .9rem; }
+  #verdict { font-size: 1.6rem; font-weight: 700; margin: 1rem 0 .25rem; padding: .2rem .6rem; border: 3px solid; display: inline-block; }
+  .GREEN { color: #1a7f37; } .AMBER { color: #8a5a00; } .RED { color: #cf222e; } .NOMATCH { color: #57606a; }
+  ul { padding-left: 1.2rem; margin: .25rem 0; }
+  code, .num { font-family: ui-monospace, monospace; }
+  button { cursor: pointer; margin: .15rem .15rem 0 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<h1>zcrowd</h1>
+<p>Before you move Zcash between a transparent and a shielded address, see how many earlier transactions look like yours. Pick a direction, type an amount. Runs entirely in this page, on a frozen sample of public mainnet data.</p>
+
+<p class="box" id="cannot-send"><b>This page cannot send anything: its Content-Security-Policy blocks all network requests. Check DevTools &gt; Network.</b><br>
+<span class="small">Your amount is not stored and not put in the URL.</span></p>
+
+<label for="mode">I plan to</label>
+<select id="mode" autocomplete="off">
+  <option value="unshield">unshield (shielded to transparent)</option>
+  <option value="shield">shield (transparent to shielded)</option>
+</select>
+
+<label for="amount" id="amount-label">Amount in ZEC</label>
+<input id="amount" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="for example 1.2497">
+<div class="hint" id="amount-hint"></div>
+
+<div>
+  <span class="small">Try a real amount from the sample:</span>
+  <button type="button" data-ex="GREEN">a big crowd</button><button type="button" data-ex="AMBER">a small crowd</button><button type="button" data-ex="RED">a single match</button><button type="button" data-ex="NO MATCH">no match</button>
+</div>
+
+<details>
+  <summary class="small">Advanced</summary>
+  <label for="tol">Tolerance (zatoshi, 1 ZEC = 100000000)</label>
+  <input id="tol" type="text" inputmode="numeric" autocomplete="off" value="0">
+  <label for="fee">Fee allowance (zatoshi, unshield only)</label>
+  <input id="fee" type="text" inputmode="numeric" autocomplete="off" value="50000">
+  <label for="look">Lookback (days)</label>
+  <input id="look" type="text" inputmode="numeric" autocomplete="off" value="30">
+</details>
+
+<div id="res" aria-live="polite">
+  <p id="msg"></p>
+  <div id="out" hidden>
+    <p id="verdict"></p>
+    <p id="why"></p>
+    <p id="crowd"></p>
+    <p id="note" class="small"></p>
+    <div id="matches-box"><h2>Matching shields (newest first, at most 10)</h2><ul id="matches"></ul></div>
+    <div id="sugg-box"><h2>Popular nearby amounts (within 10%, bigger crowd)</h2><ul id="sugg"></ul>
+      <p class="small">Do not send several chunks at the same time or to the same address; do not unshield the exact amount you shielded; waiting helps.</p></div>
+  </div>
+</div>
+
+<h2>About this sample</h2>
+<p class="small" id="cov"></p>
+<p class="small">How it works: an observer who sees a shield of about your amount followed by an unshield of about your amount, allowing for the fee, can guess they belong together; recent matches count fully and matches older than 14 days count half. The crowd is the number of such shields. GREEN (a weighted crowd of 10 or more) means a big crowd for amount and timing only, not &quot;private&quot;. NO MATCH means no shield of about that amount in the window, so amount matching cannot tie this unshield to a shield in it. An amount with 5 or more decimals is easy to recognise later, so round amounts blend in better.</p>
+<p class="small">Covers amount + timing. Not covered: address reuse (use the command line tool with --to), wallet/fee fingerprints, your IP when your wallet broadcasts (use Tor in your wallet), z-&gt;z graph, cross-pool (Sapling&lt;-&gt;Orchard) moves, off-chain records. The sample is a frozen copy: the command line tool syncs fresh data and cuts its own network access before it looks at your amount.</p>
+
+<script>
+"use strict";
+const DATA = /*__DATA__*/null;
+
+// ---- scoring: a line-by-line port of crates/zcrowd-core (crowd.rs, suggest.rs, model.rs); web/test/parity.mjs compares both ----
+const ZAT = 100000000, DAY = 86400, MAX_ZAT = 21000000 * ZAT;
+const WS = "\\t-\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000"; // Rust char::is_whitespace
+const TRIM = new RegExp("^[" + WS + "]+|[" + WS + "]+$", "g");
+
+function parseZec(s) {
+  s = s.replace(TRIM, "");
+  const dot = s.indexOf(".");
+  const int = dot < 0 ? s : s.slice(0, dot), frac = dot < 0 ? "" : s.slice(dot + 1);
+  const digits = (p) => /^[0-9]*$/.test(p);
+  if ((!int && !frac) || !digits(int) || !digits(frac)) throw new Error("not a plain non-negative decimal amount");
+  if (frac.length > 8) throw new Error("more than 8 decimal places");
+  const z = BigInt(int || "0") * BigInt(ZAT) + BigInt(frac.padEnd(8, "0"));
+  if (z <= 0n || z > BigInt(MAX_ZAT)) throw new Error("amount must be > 0 and <= 21000000 ZEC");
+  return Number(z);
+}
+const fmtZec = (z) => Math.floor(z / ZAT) + "." + String(z % ZAT).padStart(8, "0");
+const sigDecimals = (z) => String(z % ZAT).padStart(8, "0").replace(/0+$/, "").length;
+function fmtUtc(t) { const i = new Date(t * 1000).toISOString(); return i.slice(0, 10) + " " + i.slice(11, 16) + " UTC"; }
+const fmtAge = (s) => (s >= 2 * DAY ? (s / DAY).toFixed(1) + " days" : (s / 3600).toFixed(1) + " h");
+
+// DATA.s = [[unix time, zatoshi]] of every high-confidence shield in the sample (transparent in, shielded out).
+const SHIELDS = DATA.s, NOW = DATA.cov.last_t;
+const DEFAULTS = { lookback: 30, tol: 0, fee: 50000, now: NOW };
+
+function bounds(mode, zat, p) { return [Math.max(zat - p.tol, 0), zat + (mode === "unshield" ? p.fee : 0) + p.tol]; }
+function inScope(mode, zat, p, t, z) {
+  const [lo, hi] = bounds(mode, zat, p);
+  return t <= p.now && t >= Math.max(p.now - p.lookback * DAY, 0) && z >= lo && z <= hi;
+}
+function count(mode, zat, p) {
+  let k = 0, w = 0;
+  for (const [t, z] of SHIELDS) if (inScope(mode, zat, p, t, z)) { k++; w += p.now - t > 14 * DAY ? 0.5 : 1; }
+  return [k, w];
+}
+function verdictFor(mode, k, w) {
+  if (mode === "unshield" && k === 0) return "NO MATCH";
+  if (mode === "unshield" && w <= 1) return "RED";
+  if (mode === "shield" && k === 0) return "RED";
+  return w < 10 ? "AMBER" : "GREEN";
+}
+function popular(mode, zat, p, n) {
+  const lo = zat - Math.floor(zat / 10), hi = zat + Math.floor(zat / 10);
+  const base = Math.max(count(mode, zat, p)[1], 1);
+  const from = Math.max(p.now - p.lookback * DAY, 0);
+  const cands = new Set();
+  for (const [t, z] of SHIELDS) if (t <= p.now && t >= from && z >= lo && z <= hi && z !== zat) cands.add(z);
+  const out = [];
+  for (const a of cands) {
+    const [k, weighted] = count(mode, a, p);
+    if (weighted > base) out.push({ zat: a, k, weighted, verdict: verdictFor(mode, k, weighted) });
+  }
+  out.sort((a, b) => b.weighted - a.weighted || Math.abs(a.zat - zat) - Math.abs(b.zat - zat) || a.zat - b.zat);
+  return out.slice(0, n);
+}
+function check(mode, zat, p) {
+  const [k, weighted] = count(mode, zat, p);
+  const verdict = verdictFor(mode, k, weighted);
+  const matches = SHIELDS.filter(([t, z]) => inScope(mode, zat, p, t, z)).sort((a, b) => b[0] - a[0]).slice(0, 10).map(([t, z]) => ({ t, zat: z }));
+  return { k, weighted, verdict, odd_amount: sigDecimals(zat) >= 5, matches, suggestions: verdict === "GREEN" ? [] : popular(mode, zat, p, 5) };
+}
+
+// ---- page ----
+if (typeof document !== "undefined") {
+  const $ = (id) => document.getElementById(id);
+  const put = (el, text) => { el.textContent = text; return el; };
+  const WHY = {
+    unshield: {
+      "NO MATCH": "No shield of about this amount in the lookback window; amount matching cannot tie this unshield to a shield in that window.",
+      RED: "One match: if it is yours you are linked; if not, observers may wrongly link you to it.",
+      AMBER: "Small crowd.",
+      GREEN: "Big crowd for amount + timing only, not \"private\".",
+    },
+    shield: {
+      RED: "Your future unshield of this whole note would be unique.",
+      AMBER: "Small crowd.",
+      GREEN: "Big crowd for amount + timing only, not \"private\".",
+    },
+  };
+  const nat = (el, def) => { const v = el.value.trim(); if (v === "") return def; if (!/^[0-9]{1,12}$/.test(v)) throw new Error("Advanced values must be whole numbers."); return Number(v); };
+  const li = (ul, text) => { const e = document.createElement("li"); e.textContent = text; ul.appendChild(e); };
+
+  function run() {
+    const mode = $("mode").value;
+    $("amount-hint").textContent = mode === "unshield" ? "The amount the recipient receives." : "The amount you will shield.";
+    const raw = $("amount").value;
+    const p = { ...DEFAULTS };
+    $("out").hidden = true;
+    if (raw.trim() === "") { put($("msg"), "Type an amount, or try one of the real examples above."); return; }
+    let zat;
+    try {
+      zat = parseZec(raw);
+      p.lookback = nat($("look"), DEFAULTS.lookback); p.tol = nat($("tol"), DEFAULTS.tol); p.fee = nat($("fee"), DEFAULTS.fee);
+    } catch (e) { put($("msg"), e.message + " Use digits and at most 8 decimals, for example 1.2497."); return; }
+    put($("msg"), "");
+    const r = check(mode, zat, p);
+    const c = DATA.cov;
+    const v = $("verdict"); put(v, r.verdict); v.className = r.verdict.replace(" ", "");
+    put($("why"), WHY[mode][r.verdict] || "");
+    put($("crowd"), (mode === "unshield"
+      ? r.k + " earlier shields of about " + fmtZec(zat) + " ZEC (allowing for the fee)"
+      : r.k + " other shields of about " + fmtZec(zat) + " ZEC (the decoys for a later unshield of the whole note)")
+      + "; weighted " + r.weighted.toFixed(1) + " (shields older than 14 days count half).");
+    const notes = [];
+    if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
+    if (c.last_t - c.first_t + 6 * 3600 < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: a shield of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
+    put($("note"), notes.join(" "));
+    $("matches").replaceChildren(); $("sugg").replaceChildren();
+    for (const m of r.matches) li($("matches"), fmtUtc(m.t) + "  " + fmtAge(NOW - m.t) + " before the end of the sample  " + fmtZec(m.zat) + " ZEC");
+    $("matches-box").hidden = r.matches.length === 0;
+    for (const s of r.suggestions) li($("sugg"), fmtZec(s.zat) + " ZEC -> crowd " + s.k + " (weighted " + s.weighted.toFixed(1) + ", " + s.verdict + ")");
+    if (r.suggestions.length === 0) li($("sugg"), "none within 10% with a bigger crowd");
+    $("sugg-box").hidden = r.verdict === "GREEN";
+    $("out").hidden = false;
+  }
+
+  // A real send-max style amount (newest shield minus a 15000 zat fee) whose verdict is `want`; "NO MATCH" tries round amounts.
+  function example(want) {
+    const p = { ...DEFAULTS };
+    if (want === "NO MATCH") { for (const x of [1, 2, 5, 10, 3, 7, 0.5]) if (check("unshield", x * ZAT, p).verdict === want) return x * ZAT; return null; }
+    const seen = new Set();
+    for (const [, z] of [...SHIELDS].sort((a, b) => b[0] - a[0])) {
+      if (seen.has(z) || z <= 15000) continue;
+      seen.add(z);
+      if (check("unshield", z - 15000, p).verdict === want) return z - 15000;
+    }
+    return null;
+  }
+
+  for (const id of ["mode", "amount", "tol", "fee", "look"]) $(id).addEventListener("input", run);
+  $("amount").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } });
+  for (const b of document.querySelectorAll("button[data-ex]")) {
+    b.addEventListener("click", () => {
+      const x = example(b.dataset.ex);
+      $("mode").value = "unshield";
+      $("amount").value = x === null ? "" : fmtZec(x);
+      run();
+    });
+  }
+  const c0 = DATA.cov;
+  put($("cov"), "Sample: " + SHIELDS.length + " shield events from public Zcash mainnet data, blocks " + c0.first_h + ".." + c0.last_h + " (" + fmtUtc(c0.first_t) + " .. " + fmtUtc(c0.last_t) + "). Ages are measured from the end of the sample; shields before " + fmtUtc(c0.first_t) + " are not counted.");
+  run();
+}
+</script>
+</body>
+</html>

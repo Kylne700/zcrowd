@@ -34,23 +34,38 @@ fn run(args: &[&str], stdin: Option<&str>) -> (bool, String, String) {
     (o.status.success(), String::from_utf8_lossy(&o.stdout).into(), String::from_utf8_lossy(&o.stderr).into())
 }
 
+/// Spec 41 A10: exactly one `verdict: <NO MATCH|RED|AMBER|GREEN>` line and one `crowd: k=<n> weighted=<w>` line.
+fn contract(out: &str) {
+    let v: Vec<_> = out.lines().filter_map(|l| l.strip_prefix("verdict: ")).collect();
+    assert_eq!(v.len(), 1, "{out}");
+    assert!(["NO MATCH", "RED", "AMBER", "GREEN"].iter().any(|w| v[0] == *w || v[0].starts_with(&format!("{w} "))), "{out}");
+    let c: Vec<_> = out.lines().filter(|l| l.starts_with("crowd: ")).collect();
+    assert_eq!(c.len(), 1, "{out}");
+    let (k, rest) = c[0].strip_prefix("crowd: k=").and_then(|r| r.split_once(" weighted=")).unwrap_or_else(|| panic!("{out}"));
+    k.parse::<u64>().unwrap();
+    rest.split(' ').next().unwrap().parse::<f64>().unwrap();
+}
+
 #[test]
 fn cli_check_finds_send_max_round_trip_and_reads_amount_from_stdin() {
     let d = data_file("cli-a.ndjson", &[line("shield", 100_015_000, 1, "")]);
     let (ok, out, err) = run(&["check", "--unshield", "--data", d.to_str().unwrap()], Some("1.0\n"));
     assert!(ok, "{err}");
-    assert!(out.contains("crowd: 1 ") && out.contains("verdict: RED"), "{out}");
+    contract(&out);
+    assert!(out.contains("crowd: k=1 weighted=1.0 ") && out.contains("verdict: RED"), "{out}");
     assert!(!err.contains("shell history"), "stdin input must not warn");
     // value as argument: works, warns on stderr, and the amount is not echoed into the JSON output
     let (ok, out, err) = run(&["check", "--unshield", "1.0", "--data", d.to_str().unwrap(), "--json"], None);
     assert!(ok && err.contains("shell history"));
-    assert!(out.contains("\"k\":1") && !out.contains("100000000") && !out.contains("1.0000"));
+    assert!(out.contains("\"k\":1") && out.contains("\"weighted\":1.0") && out.contains("\"verdict\":\"RED\""));
+    assert!(!out.contains("100000000") && !out.contains("1.0000"));
 }
 
 #[test]
 fn cli_check_no_match_odd_amount_and_bad_input() {
     let d = data_file("cli-b.ndjson", &[line("shield", 200_000_000, 1, "")]);
     let (ok, out, _) = run(&["check", "--unshield", "-", "--data", d.to_str().unwrap()], Some("1.23456789\n"));
+    contract(&out);
     assert!(ok && out.contains("verdict: NO MATCH") && out.contains("easy to recognise"), "{out}");
     assert!(out.contains("Not checked: address reuse"));
     for bad in ["1e3", "-1", "0", "1.123456789"] {
@@ -68,8 +83,10 @@ fn cli_check_shield_mode_and_address_reuse() {
     let d = data_file("cli-c.ndjson", &v);
     let f = d.to_str().unwrap();
     let (_, out, _) = run(&["check", "--shield", "-", "--data", f], Some("1\n"));
+    contract(&out);
     assert!(out.contains("verdict: GREEN"), "{out}");
     let (ok, out, _) = run(&["check", "--unshield", "-", "--to", "-", "--data", f], Some(&format!("1\n{a}\n")));
+    contract(&out);
     assert!(ok && out.contains("verdict: RED") && out.contains("address: RED") && out.contains("shielded on"), "{out}");
     // the address never appears in the data file or anywhere else we wrote
     assert!(!std::fs::read_to_string(&d).unwrap().contains("t1Zzz"));
@@ -91,12 +108,14 @@ fn sandbox_blocks_connections() {
 
 #[test]
 fn report_is_self_contained_and_shows_the_data_window() {
-    let d = data_file("cli-report.ndjson", &[line("shield", 100_015_000, 1, ""), line("unshield", 100_000_000, 2, "")]);
+    // an earlier shield of 1.00015 and a later unshield of 1.0: one candidate for an observer
+    let d = data_file("cli-report.ndjson", &[line("shield", 100_015_000, 2, ""), line("unshield", 100_000_000, 1, "")]);
     let out = d.with_extension("html");
     let (ok, _, err) = run(&["report", "--data", d.to_str().unwrap(), "--out", out.to_str().unwrap()], None);
     assert!(ok, "{err}");
     let html = std::fs::read_to_string(&out).unwrap();
     assert!(html.contains("Window: blocks 3499000-3500100"), "{html}");
+    assert!(html.contains("<tr><td>RED</td><td>1</td><td>100.0%</td></tr>"), "{html}");
     for bad in ["src=", "href=", "url(", "http://", "https://", "@import", "<script"] {
         assert!(!html.contains(bad), "report contains {bad}");
     }

@@ -1,6 +1,6 @@
-use crate::decode::{Decoded, event_from_tx};
+use crate::decode::{Decoded, Skip, event_from_tx, txid_of};
 use crate::model::{Coverage, Event, Kind};
-use crate::source::BlockSource;
+use crate::source::{BlockSource, BlockSummary};
 use anyhow::{Result, bail};
 use futures::{StreamExt, stream};
 use std::collections::BTreeMap;
@@ -28,15 +28,43 @@ pub struct Stats {
     pub coverage: Option<Coverage>,
 }
 
+/// Spec 41 A9, for a server as the source: heights must be consecutive from `start`, and each block's prev_hash must be
+/// the hash of the block before. Catches a server that skips blocks, cuts a range short or splices two forks.
+/// It cannot tell a consistent liar from the real chain (the compact blocks carry no proof of work).
+fn link(blk: &BlockSummary, prev: &mut Option<(u64, String)>, start: u64) -> Result<()> {
+    let want = prev.as_ref().map_or(start, |p| p.0 + 1);
+    if blk.h != want {
+        bail!("expected block {want} but the server sent block {}: refusing incomplete data (try another --server)", blk.h);
+    }
+    let hex32 = |h: &str| h.len() == 64 && h.bytes().all(|c| c.is_ascii_hexdigit());
+    if !hex32(&blk.hash) || !hex32(&blk.prev_hash) {
+        bail!("block {} came without a 32-byte hash and previous hash (try another --server)", blk.h);
+    }
+    if let Some((h, hash)) = prev.as_ref()
+        && blk.prev_hash != *hash
+    {
+        bail!(
+            "block {} does not follow block {h}: its prev_hash is not that block's hash, so the server's chain is inconsistent (try another --server)",
+            blk.h
+        );
+    }
+    *prev = Some((blk.h, blk.hash.clone()));
+    Ok(())
+}
+
 /// Shield-like: transparent inputs + shielded activity. Unshield-like: no transparent inputs, transparent
 /// outputs + shielded activity. Exact amounts come later from the full transaction.
 /// The requests made depend only on [start, end] and on which transactions are candidates in it.
 pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result<(Vec<Cand>, Stats)> {
     let (mut out, mut st) = (vec![], Stats::default());
+    let (strict, mut prev) = (src.strict_chain(), None);
     let mut a = start;
     while a <= end {
         let b = (a + CHUNK - 1).min(end);
         for blk in src.blocks(a, b).await? {
+            if strict {
+                link(&blk, &mut prev, start)?;
+            }
             st.blocks += 1;
             let cov = st.coverage.get_or_insert(Coverage { first_h: blk.h, first_t: blk.t, last_h: blk.h, last_t: blk.t });
             cov.last_h = blk.h;
@@ -60,6 +88,9 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
             }
         }
         a = b + 1;
+    }
+    if strict && prev.as_ref().map(|p| p.0) != Some(end) {
+        bail!("the server stopped at block {:?} but {end} was asked for (try another --server)", prev.map(|p| p.0));
     }
     Ok((out, st))
 }
@@ -107,16 +138,26 @@ pub struct Resolved {
 pub async fn resolve<S: BlockSource>(src: &S, cands: &[Cand], cache: &RawCache, concurrency: usize) -> Result<Resolved> {
     let mut results = stream::iter(cands)
         .map(|c| async move {
-            let (raw, cached) = match cache.get(&c.txid)? {
-                Some(r) => (r, true),
-                None => {
-                    let (r, _) = src.raw_tx(&c.txid).await?;
-                    cache.put(&c.txid, &r)?;
-                    (r, false)
-                }
+            // The server is not trusted (spec 41 A9): bytes count only if they hash to the id that was asked for.
+            // A cached file gets the same test; one that fails is fetched again.
+            let cached = cache.get(&c.txid)?.filter(|r| txid_of(r, c.h).is_ok_and(|id| id == c.txid));
+            let cached_hit = cached.is_some();
+            let raw = match cached {
+                Some(r) => r,
+                None => src.raw_tx(&c.txid).await?.0,
             };
-            // A transaction we cannot parse is counted and reported, never silently dropped.
-            anyhow::Ok((event_from_tx(&raw, c.h, c.t).ok(), cached))
+            // Wrong id and unparsable bytes are counted and reported, never silently dropped, and never cached.
+            let d = match txid_of(&raw, c.h) {
+                Ok(id) if id == c.txid => {
+                    if !cached_hit {
+                        cache.put(&c.txid, &raw)?;
+                    }
+                    event_from_tx(&raw, c.h, c.t).ok()
+                }
+                Ok(_) => Some(Decoded::Skip(Skip::TxidMismatch)),
+                Err(_) => None,
+            };
+            anyhow::Ok((d, cached_hit))
         })
         .buffered(concurrency.clamp(1, MAX_CONCURRENCY));
     let mut r = Resolved::default();

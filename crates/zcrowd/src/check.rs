@@ -82,8 +82,8 @@ pub fn run(a: Args) -> Result<()> {
     }
 
     let (what, other) = match user {
-        Kind::Unshield => ("unshield (recipient gets this amount)", "earlier shields of about this amount (allowing for the fee)"),
-        Kind::Shield => ("shield", "other shields of about this amount (the decoys for a later unshield of the whole note)"),
+        Kind::Unshield => ("unshield (recipient gets this amount)", "earlier shields of about this amount, allowing for the fee"),
+        Kind::Shield => ("shield", "other shields of about this amount, the decoys for a later unshield of the whole note"),
     };
     println!(
         "check: {what} {} ZEC; fee allowance {} zat, tolerance {} zat, lookback {} days",
@@ -117,7 +117,8 @@ pub fn run(a: Args) -> Result<()> {
             fmt_utc(cov.first_t)
         );
     }
-    println!("crowd: {} {other}; weighted {:.1} (shields older than 14 days count half)", c.k, c.weighted);
+    // stable line (spec 41 A10): `crowd: k=<n> weighted=<w>`, explanation after it
+    println!("crowd: k={} weighted={:.1} ({other}; shields older than 14 days count half)", c.k, c.weighted);
     if !c.matches.is_empty() {
         println!("matches (newest first, up to 10):");
         for e in &c.matches {

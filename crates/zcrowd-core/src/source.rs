@@ -19,11 +19,17 @@ pub struct TxSummary {
     pub coinbase: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BlockSummary {
     pub h: u64,
     pub t: u64,
     pub txs: Vec<TxSummary>,
+    /// Block hash and previous block hash as the server states them (hex, one byte order for both).
+    /// Empty in the committed fixtures, which are single blocks and not a chain.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prev_hash: String,
 }
 
 pub trait BlockSource {
@@ -32,6 +38,11 @@ pub trait BlockSource {
     async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>>;
     /// Raw transaction bytes and the height it was mined at.
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)>;
+    /// True for a server: every requested height must come back, linked by block hashes (spec 41 A9).
+    /// False for sparse fixtures.
+    fn strict_chain(&self) -> bool {
+        false
+    }
 }
 
 pub fn txid_to_wire(display: &str) -> Result<Vec<u8>> {
@@ -44,6 +55,17 @@ pub fn txid_to_wire(display: &str) -> Result<Vec<u8>> {
 }
 
 pub const DEFAULT_SERVERS: [&str; 3] = ["https://zec.rocks:443", "https://na.zec.rocks:443", "https://eu.zec.rocks:443"];
+
+/// tonic sends plain text for an `http://` URL even with a TLS config, so refuse that unless the server is this machine.
+fn require_tls(url: &str) -> Result<()> {
+    let uri: tonic::codegen::http::Uri = url.parse().with_context(|| format!("not a URL: {url}"))?;
+    let host = uri.host().unwrap_or("").trim_matches(['[', ']']);
+    let local = host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback());
+    if uri.scheme_str() != Some("https") && !local {
+        bail!("refusing a plain-text connection to {url}: use https:// (http:// is only allowed for a lightwalletd on this machine)");
+    }
+    Ok(())
+}
 
 pub struct Lwd {
     client: CompactTxStreamerClient<Channel>,
@@ -84,6 +106,7 @@ impl Lwd {
     }
 
     async fn try_one(url: &str) -> Result<Lwd> {
+        require_tls(url)?;
         let ep = Channel::from_shared(url.to_string())?
             .tls_config(ClientTlsConfig::new().with_webpki_roots())?
             .connect_timeout(Duration::from_secs(10))
@@ -138,7 +161,7 @@ impl BlockSource for Lwd {
                     }
                 })
                 .collect();
-            out.push(BlockSummary { h: b.height, t: b.time as u64, txs });
+            out.push(BlockSummary { h: b.height, t: b.time as u64, txs, hash: hex::encode(&b.hash), prev_hash: hex::encode(&b.prev_hash) });
         }
         Ok(out)
     }
@@ -153,6 +176,10 @@ impl BlockSource for Lwd {
         .await?
         .into_inner();
         Ok((r.data, r.height))
+    }
+
+    fn strict_chain(&self) -> bool {
+        true
     }
 }
 
@@ -223,5 +250,29 @@ impl<S: BlockSource> BlockSource for Recording<S> {
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
         self.note(format!("tx {txid}"));
         self.inner.raw_tx(txid).await
+    }
+    fn strict_chain(&self) -> bool {
+        self.inner.strict_chain()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_tls;
+
+    #[test]
+    fn plain_text_only_to_this_machine() {
+        for ok in ["https://zec.rocks:443", "https://example.org", "http://127.0.0.1:9067", "http://localhost:9067", "http://[::1]:9067"] {
+            assert!(require_tls(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://zec.rocks:443",
+            "http://example.org",
+            "http://127.0.0.1.example.org",
+            "http://localhost.example.org",
+            "http://10.0.0.5:9067",
+        ] {
+            assert!(require_tls(bad).is_err(), "{bad}");
+        }
     }
 }

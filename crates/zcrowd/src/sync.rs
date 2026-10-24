@@ -90,6 +90,17 @@ async fn go<S: BlockSource>(s: &S, days: u64, out: &Path, candidates_only: bool,
         "excluded: {} ambiguous_cross_pool(kept, low confidence, not counted in crowds)={low}",
         if skipped.is_empty() { "none".into() } else { skipped.join(" ") }
     );
+    println!(
+        "integrity: transaction id recomputed from the raw bytes for {} of {} candidates, {} did not match (dropped); block hash chain {}",
+        r.fetched + r.from_cache,
+        cands.len(),
+        r.skipped.get("txid_mismatch").unwrap_or(&0),
+        if s.strict_chain() {
+            format!("checked over {} blocks", st.blocks)
+        } else {
+            "NOT checked (offline fixtures are single blocks, not a chain)".into()
+        }
+    );
     println!("wrote {} (raw transactions cached in {})", out.display(), cache.0.display());
     println!(
         "tip: sync on a schedule, not right before you transact. The server sees your IP and that you run zcrowd, nothing about your wallet; use Tor or a VPN at system level."

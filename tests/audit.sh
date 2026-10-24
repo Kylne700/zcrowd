@@ -231,8 +231,9 @@ if git grep -nI --untracked --exclude-standard -E '[[:alnum:]._%+-]+@[[:alnum:].
 IDS=$(git log --format='%an|%cn|%ae|%ce' | tr '|' '\n' | sort -u)
 echo "$IDS" | grep -qx 'Kylne700' || die "P11 commit name is not the neutral name"
 [ "$(echo "$IDS" | grep -vc -E '^(Kylne700|[0-9]+\+Kylne700@users\.noreply\.github\.com)$')" -eq 0 ] || die "P11 a commit has another author or committer identity: $IDS"
-# The first stages had no remote. Now the project's own private GitHub repository is the one allowed; any other is a leak.
-[ -z "$(git remote -v | awk '{print $2}' | sort -u | grep -vxF 'https://github.com/Kylne700/zcrowd.git')" ] || die "P11 the repository has a remote other than the project's own"
+# No remote, or only the project's own repository in the spellings a clone gets: https with or without .git, or SSH (scp-style or ssh://).
+# A fork, another name or a URL with a token in it is a leak. [@] keeps an email-like string out of this file (the check above would flag it).
+[ -z "$(git remote -v | awk '{print $2}' | sort -u | grep -vxE '(https://github[.]com/|git[@]github[.]com:|ssh://git[@]github[.]com/)Kylne700/zcrowd([.]git)?')" ] || die "P11 the repository has a remote other than the project's own"
 git check-ignore -q data/x && git check-ignore -q target/x || die "P11 data/ and target/ are not ignored"
 ok "P11 no home path, mail address or personal string in tracked or untracked files; $(git rev-list --count HEAD) commits, one neutral identity; no remote but the project's own; data/ and target/ ignored"
 

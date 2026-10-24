@@ -114,8 +114,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # tests/audit.sh P11 allows no remote or the project's own, spelled exactly https://github.com/Kylne700/zcrowd.git.
-      # How a CI checkout spells its origin is not ours to control and nothing in this job needs a remote, so drop it.
+      # tests/audit.sh P11 allows no remote, or the project's own repository (https or SSH spelling). A copy under another name
+      # would fail it, and nothing in this job needs a remote, so drop it.
       - name: Remove the remote
         run: git remote remove origin
 

@@ -317,7 +317,7 @@ is a count, not a rewrite.
 
 | Item | Commit | Test or proof (fails or differs without it) |
 |---|---|---|
-| CI keeps its `git remote remove origin` step | 5444085 | by reading `tests/audit.sh` (P11 allows no remote, or exactly `https://github.com/Kylne700/zcrowd.git`); no CI run exists |
+| CI keeps its `git remote remove origin` step; audit P11 accepts the project's own repository as https (with or without `.git`) or SSH | 5444085, and the P11 commit after be6102d | six accepted and nine refused spellings piped through the P11 `grep -vxE` (below); no CI run exists |
 | SQLite built in: `libsqlite3-sys = { version = "0.37", features = ["bundled"] }` in `zcrowd-core`; the vcpkg steps of ci.yml and release.yml are gone | 149f772 | `cargo tree -e features -i libsqlite3-sys` shows `feature "bundled"` under `zcrowd-core`; `ldd` of the binary built by `.github/scripts/release.sh` lists glibc, libgcc_s and libm only (the debug binary built before lists `libsqlite3.so.0`); Cargo.lock gains two lines and no package |
 | B1: `input_address` made up a P2SH `src` for a coinbase scriptSig | aa555f0, 8a991b4 | `a_coinbase_input_has_no_address_even_when_its_text_looks_like_a_redeem_script` (a real coinbase shield, height 3496848); it failed before with `["t3L15jegnpAVndkDzYKEvGKzAPXpaKkWHS8"]` |
 | Windows default for `--tor-dir`: `%LOCALAPPDATA%\zcrowd\tor` | 0863df2 | `the_tor_dir_follows_the_system_and_is_never_a_relative_path` (with the Windows branch switched off it fails) |
@@ -359,8 +359,9 @@ is a count, not a rewrite.
 - **Rust 1.90.** The highest `rust-version` any of the 624 packages declares is 1.90.0 (`typed-index-collections 3.5.0`, through
   arti); the next is 1.89. Only `check` ran with 1.90.0 (rustc 1.90.0 (1159e78c4 2025-09-14)); the tests ran with 1.97.1.
 - **Why the CI step that drops `origin` stays.** With no remote P11 passes whatever a runner calls its origin, and that job needs no
-  remote. Open: a reviewer who clones `https://github.com/Kylne700/zcrowd` without `.git`, or over SSH, would fail P11 on a
-  correct clone, because it compares the URL as one string (`tests/audit.sh`, P11). Spell the clone command in the README with `.git`, or loosen P11.
+  remote. P11 itself accepts the project's own repository, `Kylne700/zcrowd`, as https with or without `.git` and as SSH (scp-style
+  or `ssh://`), so a reviewer's correct clone passes; a fork, another name or a URL with a token in it is refused. Checked by
+  piping six accepted and nine refused spellings through the same `grep -vxE` (all six pass, all nine come out), not by a clone.
 
 ### Final run (S9c)
 
@@ -435,8 +436,8 @@ history are the neutral author address and the `noreply` trailer).
     `check`" (stamp-file test), a leak-detector canary, and runs the plain-text refusal under `unshare -rn`.
 19. Commit trailers: S1..S3 carry the Opus 5.5 co-author trailer, S4 onward the Sonnet 5.5 one (instruction changed
     between stages). Author and committer are the neutral identity in every commit; no remote existed until the lead
-added the project's own private GitHub remote `origin`. The agents never push, and audit P11 now accepts that one URL and
-no other remote.
+added the project's own private GitHub remote `origin`. The agents never push, and audit P11 now accepts that one repository
+(https or SSH spelling) and no other remote.
 20. Review follow-up (one commit after the S5 commit), real bug: `check --json --to <address>` printed the verdict of the
     amount alone, so a reused address showed a false GREEN in JSON while the text said RED. Fixed in `check.rs`:
     `verdict` is now the overall one (the worse of amount and address), and `amount_verdict` and `address_verdict`

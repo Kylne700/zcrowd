@@ -263,7 +263,10 @@ fn decode_coinbase_shield_into_ironwood() {
 #[test]
 fn a_coinbase_input_has_no_address_even_when_its_text_looks_like_a_redeem_script() {
     let e = ev("8db5109ff953c22f872e49ebbd2236be4aedc0402b812ede2b01d5c2fa707bf2", 3496848);
-    assert_eq!((e.kind, e.zat, e.pool, e.confidence, e.coinbase, e.n_tin), (Kind::Shield, 125_010_000, Pool::Ironwood, Confidence::High, true, 1));
+    assert_eq!(
+        (e.kind, e.zat, e.pool, e.confidence, e.coinbase, e.n_tin),
+        (Kind::Shield, 125_010_000, Pool::Ironwood, Confidence::High, true, 1)
+    );
     assert!(e.src.is_empty(), "{:?}", e.src);
 }
 

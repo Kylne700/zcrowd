@@ -149,6 +149,15 @@ pub fn read_coverage(data: &std::path::Path) -> Option<Coverage> {
     serde_json::from_slice(&std::fs::read(Coverage::path_for(data)).ok()?).ok()
 }
 
+/// The sidecar coverage, or (flag true) a window estimated from the events when the sidecar is missing.
+pub fn coverage_of(data: &std::path::Path, events: &[Event]) -> Option<(Coverage, bool)> {
+    if let Some(c) = read_coverage(data) {
+        return Some((c, false));
+    }
+    let (f, l) = (events.iter().min_by_key(|e| e.h)?, events.iter().max_by_key(|e| e.h)?);
+    Some((Coverage { first_h: f.h, first_t: f.t, last_h: l.h, last_t: l.t }, true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

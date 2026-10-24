@@ -88,3 +88,16 @@ fn sandbox_blocks_connections() {
     let (_, boxed, err) = run(&["sandbox-probe", &addr, "--sandbox"], None);
     assert!(boxed.starts_with("blocked"), "{boxed} {err}");
 }
+
+#[test]
+fn report_is_self_contained_and_shows_the_data_window() {
+    let d = data_file("cli-report.ndjson", &[line("shield", 100_015_000, 1, ""), line("unshield", 100_000_000, 2, "")]);
+    let out = d.with_extension("html");
+    let (ok, _, err) = run(&["report", "--data", d.to_str().unwrap(), "--out", out.to_str().unwrap()], None);
+    assert!(ok, "{err}");
+    let html = std::fs::read_to_string(&out).unwrap();
+    assert!(html.contains("Window: blocks 3499000-3500100"), "{html}");
+    for bad in ["src=", "href=", "url(", "http://", "https://", "@import", "<script"] {
+        assert!(!html.contains(bad), "report contains {bad}");
+    }
+}

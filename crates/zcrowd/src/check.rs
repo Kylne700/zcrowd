@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use zcrowd_core::Kind;
 use zcrowd_core::crowd::{AddrFinding, DAY, Params, Verdict, address_check, score};
 use zcrowd_core::decode::canonical_taddr;
-use zcrowd_core::model::{Coverage, Event, coinbase_tag, fmt_utc, fmt_zec, parse_zec, read_coverage, read_ndjson};
+use zcrowd_core::model::{Event, coinbase_tag, coverage_of, fmt_utc, fmt_zec, parse_zec, read_ndjson};
 use zcrowd_core::suggest::popular;
 
 pub struct Args {
@@ -63,13 +63,7 @@ pub fn run(a: Args) -> Result<()> {
     if events.is_empty() {
         bail!("{} has no events", a.data.display());
     }
-    let (cov, cov_derived) = match read_coverage(&a.data) {
-        Some(c) => (c, false),
-        None => {
-            let (f, l) = (events.iter().min_by_key(|e| e.h).unwrap(), events.iter().max_by_key(|e| e.h).unwrap());
-            (Coverage { first_h: f.h, first_t: f.t, last_h: l.h, last_t: l.t }, true)
-        }
-    };
+    let (cov, cov_derived) = coverage_of(&a.data, &events).expect("events is non-empty");
     let now = cov.last_t;
     let p = Params { lookback_days: a.lookback_days, tol_zat: a.tol_zat, fee_allowance_zat: a.fee_allowance_zat, now };
     let c = score(&events, user, zat, &p);

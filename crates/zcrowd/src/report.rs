@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
 use zcrowd_core::Kind;
-use zcrowd_core::model::{Confidence, Event, fmt_zec, read_ndjson};
+use zcrowd_core::model::{Confidence, Coverage, Event, coverage_of, fmt_utc, fmt_zec, read_ndjson};
 
 const BUCKETS: [(&str, u64, u64); 7] = [
     ("<0.01", 0, 1_000_000),
@@ -16,13 +16,18 @@ const BUCKETS: [(&str, u64, u64); 7] = [
 ];
 
 pub fn run(out: &Path, data: &Path) -> Result<()> {
-    let evs: Vec<Event> = read_ndjson(data)?.into_iter().filter(|e| e.confidence == Confidence::High).collect();
-    std::fs::write(out, render(&evs))?;
+    let all = read_ndjson(data)?;
+    let cov = coverage_of(data, &all).map(|c| c.0);
+    let evs: Vec<Event> = all.into_iter().filter(|e| e.confidence == Confidence::High).collect();
+    std::fs::write(out, render(&evs, cov))?;
     println!("wrote {} ({} events)", out.display(), evs.len());
     Ok(())
 }
 
-pub fn render(evs: &[Event]) -> String {
+pub fn render(evs: &[Event], cov: Option<Coverage>) -> String {
+    let window = cov.map_or(String::new(), |c| {
+        format!(" Window: blocks {}-{} ({} to {}).", c.first_h, c.last_h, fmt_utc(c.first_t), fmt_utc(c.last_t))
+    });
     let mut by_amt: HashMap<u64, (usize, usize)> = HashMap::new();
     for e in evs {
         let c = by_amt.entry(e.zat).or_default();
@@ -71,7 +76,7 @@ pub fn render(evs: &[Event]) -> String {
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>zcrowd report</title>\
 <style>body{{font:15px/1.5 sans-serif;max-width:640px;margin:2em auto;padding:0 1em}}td,th{{padding:2px 12px;text-align:right}}</style></head><body>\
 <h1>zcrowd report</h1>\
-<p>{} events from public chain data: {} shields (t to z), {} unshields (z to t). Mixed transactions excluded.</p>\
+<p>{} events from public chain data: {} shields (t to z), {} unshields (z to t).{window} Ambiguous cross-pool transactions excluded.</p>\
 <p><b>{uniq}</b> events ({:.1}%) have an amount that no other event shares: these are the easiest to link.</p>\
 <h2>Events by amount</h2>{svg}\
 <h2>Most common exact amounts</h2><table><tr><th>ZEC</th><th>shields</th><th>unshields</th></tr>{rows}</table>\

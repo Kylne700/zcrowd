@@ -215,7 +215,8 @@ Decisions worth a reviewer's eye:
   file ... run `zcrowd sync` again"), never a window that claims more blocks than the events hold. It is not read as
   "the interrupted sync can be resumed".
 - A Unified Address given to `--to` is judged by its transparent receiver only, because that is what an unshield to it
-  would use; ZIP 316 says a wallet prefers the shielded receiver, and the output says so. Uppercase `U1...` is still refused.
+  would use; ZIP 316 says a wallet prefers the shielded receiver, and the output says so. A Unified Address in capitals
+  is accepted since the S9c stage (below); mixed case is refused.
 - Orchard after NU6.3 (3,428,143): no rule found in the Orchard and zcash_primitives crates or in ZIP 2005 stops value
   from entering Orchard, but the builder can no longer pay another person's Orchard address (cross-address output is
   off in the V3 Orchard pool: orchard-0.16.0 `src/lib.rs:196-198`, `src/builder.rs:1004-1026` and `1374-1379`;
@@ -308,6 +309,85 @@ AUDIT OK
 E2E OK
 ```
 
+## Merge and portability stage (S9c)
+
+Master is the review-fix stage's master (eaa45fd) with branch `ci` merged in (50fd22f, no textual conflict) and the items below,
+one commit each. No data was refreshed: `fixtures/flows-sample.ndjson` and its meta are as before, so every sample number below
+is a count, not a rewrite.
+
+| Item | Commit | Test or proof (fails or differs without it) |
+|---|---|---|
+| CI keeps its `git remote remove origin` step | 5444085 | by reading `tests/audit.sh` (P11 allows no remote, or exactly `https://github.com/Kylne700/zcrowd.git`); no CI run exists |
+| SQLite built in: `libsqlite3-sys = { version = "0.37", features = ["bundled"] }` in `zcrowd-core`; the vcpkg steps of ci.yml and release.yml are gone | 149f772 | `cargo tree -e features -i libsqlite3-sys` shows `feature "bundled"` under `zcrowd-core`; `ldd` of the binary built by `.github/scripts/release.sh` lists glibc, libgcc_s and libm only (the debug binary built before lists `libsqlite3.so.0`); Cargo.lock gains two lines and no package |
+| B1: `input_address` made up a P2SH `src` for a coinbase scriptSig | aa555f0, 8a991b4 | `a_coinbase_input_has_no_address_even_when_its_text_looks_like_a_redeem_script` (a real coinbase shield, height 3496848); it failed before with `["t3L15jegnpAVndkDzYKEvGKzAPXpaKkWHS8"]` |
+| Windows default for `--tor-dir`: `%LOCALAPPDATA%\zcrowd\tor` | 0863df2 | `the_tor_dir_follows_the_system_and_is_never_a_relative_path` (with the Windows branch switched off it fails) |
+| `--to` takes a Unified Address in capitals | da4df0f | `a_unified_address_in_capitals_is_accepted_but_mixed_case_is_not`; the CLI test of Unified Addresses also feeds capitals and a mixed-case string and checks that no form of the address is printed back |
+| `rust-version = "1.90"` | be6102d | `cargo +1.90.0 check --workspace --all-targets --locked --offline`: exit 0, no warning |
+| Web: `version: 2` in the synthetic meta of `parity.mjs`, the 6 h slack out of the page's short-window warning, `web/index.html` rebuilt | af400f9 | `node web/test/parity.mjs` failed on the merged tree; now `PARITY OK: 808` |
+
+- **B1.** `event_from_tx` is the only place that sets `src`. A coinbase scriptSig is free text the miner wrote; its last push
+  was read as a P2SH redeem script and hashed into a t3 address, so a coinbase shield got a made-up `src`. That address belongs
+  to nobody (it is the hash of the text, e.g. of a pool tag): the damage was wrong data in `src` and a `--to` check that would
+  have called that invented address "shielded from", not a wrong verdict for a real wallet (the message of aa555f0 says a real
+  address could be flagged: too strong). The fix asks `TransparentBundle::is_coinbase()` and skips `input_address`.
+  `core` test `decode_coinbase_shield_into_ironwood` also asserts an empty `src`. The new fixture `fixtures/raw/8db5109f...hex` is
+  the same transaction an independent data check compared with two public explorers on 2026-10-24: kind, pool, amount,
+  height, time, counts and confidence agreed; both explorers show no input address for a coinbase.
+- **What changes in the committed sample** (all 67,965 lines re-decoded from their raw transactions with a throwaway example,
+  deleted after): on the old decoder 0 lines differ (the control: the method reproduces the file); on the fixed decoder 1,466
+  differ, all coinbase shields, `src` only, `src` becomes empty, nothing else moves. The sample has 1,564 coinbase shields:
+  1,466 carried a made-up `src` (`t3L15jeg...` 1,413 times, `t3bKHRKv...` 52, `t3bvkZeE...` once), 98 had none. Non-coinbase:
+  27,086 shields, 45 of them with an input read as P2SH (40,045 inputs), unchanged; none of their last pushes looks like a DER
+  signature, so the other possible misfire of that rule is not visible here (still NOT VERIFIED below).
+- Until the sample is refreshed, `verify` of a coinbase shield of it prints the recomputed event and
+  `Error: DIFF: recomputed event differs from the cached line` (exit 1). `sync` replaces the events inside the new range and keeps
+  older ones as they are, so the refresh must cover the old range or write a fresh `--out`. `FORMAT_VERSION` stays 2: files
+  stay readable, one field of one kind of event was corrected. `rg -c '"coinbase":true.*"src"' fixtures/flows-sample.ndjson`
+  prints 1466 now and must print nothing after the refresh. `web/index.html` embeds the sample: rebuild it with `node web/build.mjs` then.
+- **SQLite.** The crate that pulls it is `zcrowd-core` (`zcash_client_backend` with `tor` -> arti -> `tor-dirmgr` -> `rusqlite 0.39`
+  -> `libsqlite3-sys 0.37`); features unify over the workspace. Arti's directory cache is a SQLite file (`arti-cache/dir.sqlite3`),
+  so a real Tor sync is the runtime test: `LIVE=1 bash tests/audit.sh` below ran it with the new binary. A C compiler is not a
+  new requirement (`ring`, `secp256k1-sys`, `zstd-sys` and `liblzma-sys` already depend on `cc`). `release.sh` no longer allows `libsqlite3.so.0`.
+- **Windows tor directory.** `tor_dir_in(windows, LOCALAPPDATA, XDG_CACHE_HOME, HOME)` in `main.rs` takes the environment as
+  arguments, so the test runs on every system (its paths come from `std::env::temp_dir()`, because whether a path is absolute
+  depends on the system). Windows: `%LOCALAPPDATA%\zcrowd\tor` and nothing else; elsewhere `$XDG_CACHE_HOME/zcrowd/tor`, else
+  `~/.cache/zcrowd/tor`; a relative value is ignored, and with nothing absolute `sync` stops: `no cache directory (... not set, or not an
+  absolute path); pass --tor-dir`. A real run on Windows: NOT VERIFIED.
+- **Capitals.** Bech32m (BIP 350) allows all-lowercase or all-uppercase. `destination` lowercases a string that has no lowercase
+  letter, which is safe because a Base58 t1/t3 address always has its lowercase `t`; the Rust crate decodes lowercase only.
+  Accepted: `t1`, `t3`, `tex1`, `u1`, `tu1`, with `tex1` and Unified Addresses in lowercase or in capitals; mixed case and capitals-only t1/t3 are refused.
+- **Rust 1.90.** The highest `rust-version` any of the 624 packages declares is 1.90.0 (`typed-index-collections 3.5.0`, through
+  arti); the next is 1.89. Only `check` ran with 1.90.0 (rustc 1.90.0 (1159e78c4 2025-09-14)); the tests ran with 1.97.1.
+- **Why the CI step that drops `origin` stays.** With no remote P11 passes whatever a runner calls its origin, and that job needs no
+  remote. Open: a reviewer who clones `https://github.com/Kylne700/zcrowd` without `.git`, or over SSH, would fail P11 on a
+  correct clone, because it compares the URL as one string (`tests/audit.sh`, P11). Spell the clone command in the README with `.git`, or loosen P11.
+
+### Final run (S9c)
+
+`PLAYWRIGHT_CORE=<playwright-core dir> bash tests/e2e.sh` on the merged tree (HEAD af400f9): exit 0, 127 s on a busy machine, no
+`LIVE=1`. Of its 28 `ok` lines 25 are the same as in the final run of the review-fix stage above (compared with `diff`); the
+three that differ:
+
+```
+ok    cargo test: 99 tests passed, 0 failed
+ok    P10 PARITY OK: 808 JS-vs-Rust comparisons (128 sample amounts, 20 rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (8 sample and 39 synthetic comparisons with a time tie)
+ok    P11 no home path, mail address or personal string in tracked or untracked files; 52 commits, one neutral identity; no remote but the project's own; data/ and target/ ignored
+```
+
+It prints `SKIP  T3/T4/T6 live Tor leak check ... (NOT VERIFIED)` and `AUDIT OK (1 check(s) skipped and NOT VERIFIED ...)` because
+`LIVE=1` was not set; the e2e `LIVE one-day sync` line was not run in this stage. `LIVE=1 bash tests/audit.sh` (own temporary
+directory, Tor, 243 s, `AUDIT OK`, no SKIP) printed the live line:
+
+```
+ok    T3/T4/T6 lookups (any name)=0, lookups of the server name=0, connects to server IPs=0, port-53 sends=0, distinct connect destinations (Tor relays)=8; through Tor: the tip, every block and 20 transactions; 6 files, all arti directory data, guard state or locks; 0 mention the server name
+```
+
+Also run: `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` (exit 0); `node web/test/parity.mjs` (PARITY OK 808);
+`BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`: `HEADLESS OK (chromium 154.0.8037.92, firefox 157.0, webkit 27.2; the
+server saw 3 page loads and nothing else)`; the privacy scan of the repository over all branches: 0 personal-string hits, 0 home paths,
+0 key-like patterns and 0 mail addresses in files, 0 personal-string hits and 0 home paths in history (the only mail addresses in
+history are the neutral author address and the `noreply` trailer).
+
 ## Deviations from the first design (and why)
 
 1. `--unshield 1.23456789` prints NO MATCH plus the odd-amount note, not RED (the first design said RED; the privacy spec made odd amounts a
@@ -387,8 +467,8 @@ no other remote.
   pools: since the review-fix stage `sync` refuses a range in which, from NU6.3 on, more than 1000 blocks hold data in some
   pool and none holds data in another. A range of about a day or less is below that and not protected, and a server
   that leaves a pool out for only part of the range is not noticed.
-- The consensus side of the Orchard finding above (zebrad and zcashd were not read). The oldest Rust that builds it:
-  the dependencies declare 1.90 (`typed-index-collections`, through arti); it was built here with 1.97.1 only. Whether
+- The consensus side of the Orchard finding above (zebrad and zcashd were not read). The oldest Rust that builds it
+  is 1.90 (`rust-version`; `cargo +1.90.0 check --workspace --all-targets --locked` passes, S9c); the tests ran with 1.97.1 only. Whether
   the sandbox tests and audit P2 run on a CI runner: Ubuntu 24.04 can set `kernel.apparmor_restrict_unprivileged_userns=1`,
   which breaks `unshare` of a user namespace (no CI run has happened).
 - A lightwalletd server that lies consistently (compact blocks carry no proof of work). Independence of the default

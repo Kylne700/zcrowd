@@ -81,12 +81,20 @@ print(s, "%d.%08d" % (z // 10**8, z % 10**8), z, h.hex())
 PY
 )
 [[ $ADDR == t1* ]] || die "P3 test address generator is broken: $ADDR"
-# scan <dir> [pathspec...]: succeeds when any typed value occurs in a file under <dir>
+# scan <dir> [pathspec...]: succeeds when any typed value occurs in a file under <dir>, whatever git thinks of the file
 scan() { local d=$1; shift; (cd "$d" && git grep --no-index -lF -e "$ADDR" -e "$AMT" -e "$ZAT" -e "$H160" -- . "$@"); }
-if scan . ':!target' >/dev/null 2>&1; then die "P3 the random test values were already in the tree (run again)"; fi
-# the detector itself must work: a file holding the values is found
+# scan_repo <dir> [pathspec...]: the same for the files git shows (tracked, or untracked and not ignored), with no user-wide ignore rules.
+# The ignored data/ (about 1.6 GB of chain data) and target/ are not what P3 is about: a check that wrote there is caught by the
+# "files changed" test below, and a random 9-digit value turns up in that much data by chance in about 2% of runs (research/46).
+scan_repo() { local d=$1; shift; (cd "$d" && git -c core.excludesFile=/dev/null grep --no-index --exclude-standard -lF -e "$ADDR" -e "$AMT" -e "$ZAT" -e "$H160" -- . "$@"); }
+if scan_repo . ':!target' >/dev/null 2>&1; then die "P3 the random test values were already in the tree (run again)"; fi
+# the detectors themselves must work: a file holding the values is found, and scan_repo skips an ignored one but not a plain one
 mkdir -p "$T/canary" && printf '%s %s %s %s\n' "$ADDR" "$AMT" "$ZAT" "$H160" >"$T/canary/leak"
 scan "$T/canary" >/dev/null 2>&1 || die "P3 the leak detector does not find a planted file"
+mkdir -p "$T/toy/data" && printf 'data/\n' >"$T/toy/.gitignore" && cp "$T/canary/leak" "$T/toy/data/leak"
+if scan_repo "$T/toy" >/dev/null 2>&1; then die "P3 the repository scan reads ignored files (the values would be found in data/ by chance)"; fi
+cp "$T/canary/leak" "$T/toy/plain"
+scan_repo "$T/toy" >/dev/null 2>&1 || die "P3 the repository scan does not find a planted file"
 mkdir -p "$T/env/home" "$T/env/tmp" "$T/env/cache" "$T/env/data" "$T/env/config" "$T/env/state"
 typed() { # args... ; stdin from the caller
   env HOME="$T/env/home" TMPDIR="$T/env/tmp" XDG_CACHE_HOME="$T/env/cache" XDG_DATA_HOME="$T/env/data" \
@@ -105,7 +113,7 @@ for f in t1 t2 t3 t4; do
   if grep -qF -e "$AMT" -e "$ZAT" "$T/$f"; then die "P3 the typed amount was echoed in the output ($f)"; fi
 done
 grep -q 'shell history' "$T/t4" || die "P3 passing values as arguments printed no warning"
-if scan . ':!target'; then die "P3 a typed value was written into the repository tree"; fi
+if scan_repo . ':!target'; then die "P3 a typed value was written into the repository tree"; fi
 if scan "$T/env"; then die "P3 a typed value was written into the fresh HOME, TMPDIR or XDG directories"; fi
 [ -z "$(find "$T/env" -type f)" ] || die "P3 files appeared in the fresh HOME, TMPDIR or XDG directories"
 NEW=$(find . -newer "$T/stamp" -type f -not -path './target/*' -not -path './.git/*' | head -5)

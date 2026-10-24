@@ -108,6 +108,9 @@ impl<S: BlockSource> BlockSource for Progress<'_, S> {
         }
         Ok(r)
     }
+    async fn tree_sizes(&self, h: u64) -> Result<Option<[u64; 3]>> {
+        self.inner.tree_sizes(h).await
+    }
     fn strict_chain(&self) -> bool {
         self.inner.strict_chain()
     }
@@ -157,6 +160,20 @@ async fn go<S: BlockSource>(
             st.pool_blocks[1],
             st.pool_blocks[2]
         );
+    }
+    match st.tree_growth {
+        Some(g) => println!(
+            "tree check: the server's tree states (blocks {} and {end}) grew by Sapling {}, Orchard {}, Ironwood {} note commitments, exactly what its blocks hold",
+            start.saturating_sub(1),
+            g[0],
+            g[1],
+            g[2]
+        ),
+        None if s.strict_chain() => println!(
+            "tree check: none, the server serves no tree states (a pool with no data in more than {} blocks from NU6.3 on is refused instead)",
+            zcrowd_core::ingest::MIN_BLOCKS_BEFORE_POOL_MISSING
+        ),
+        None => {}
     }
     if candidates_only {
         return Ok(());

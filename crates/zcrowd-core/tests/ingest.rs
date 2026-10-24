@@ -139,6 +139,7 @@ fn chain(from: u64, n: u64) -> Chain {
                 txs: vec![tx(h, 1, 0, true, false, false)],
                 hash: hash(h),
                 prev_hash: hash(h - 1),
+                ..Default::default()
             })
             .collect(),
     )
@@ -332,7 +333,8 @@ async fn candidate_kinds_cover_coinbase_and_moves() {
         tx(6, 1, 1, false, false, false), // no shielded part
         tx(7, 3, 2, true, true, false),   // everything: it is shield-like, decode sorts it out
     ];
-    let src = Chain(vec![BlockSummary { h: 5, t: 9, txs, hash: format!("{:064x}", 5), prev_hash: format!("{:064x}", 4) }]);
+    let src =
+        Chain(vec![BlockSummary { h: 5, t: 9, txs, hash: format!("{:064x}", 5), prev_hash: format!("{:064x}", 4), ..Default::default() }]);
     let (c, st) = candidates(&src, 5, 5).await.unwrap();
     let got: Vec<_> = c.iter().map(|c| (c.txid.trim_start_matches('0').to_string(), c.kind)).collect();
     use zcrowd_core::Kind::{Move, Shield, Unshield};
@@ -421,4 +423,132 @@ async fn blocks_before_the_activation_of_nu6_3_do_not_count_for_the_pool_check()
     let mut c = chain(from - 3_000, 2_500);
     c.0.iter_mut().for_each(|b| b.txs[0].pools = [true, true, false]);
     assert_eq!(crawl(&c).await.unwrap().nu6_3_blocks, 0);
+}
+
+/// A server that serves tree states: `sizes(h)` is what it says its trees (Sapling, Orchard, Ironwood) hold after block `h`.
+/// `asked` counts the block requests it got.
+struct Trees {
+    chain: Chain,
+    sizes: Box<dyn Fn(u64) -> Option<[u64; 3]> + Sync>,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl BlockSource for Trees {
+    async fn tip(&self) -> Result<u64> {
+        self.chain.tip().await
+    }
+    async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.chain.blocks(start, end).await
+    }
+    async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
+        self.chain.raw_tx(txid).await
+    }
+    async fn tree_sizes(&self, h: u64) -> Result<Option<[u64; 3]>> {
+        Ok((self.sizes)(h))
+    }
+    fn strict_chain(&self) -> bool {
+        true
+    }
+}
+
+fn with_trees(chain: Chain, sizes: impl Fn(u64) -> Option<[u64; 3]> + Sync + 'static) -> Trees {
+    Trees { chain, sizes: Box::new(sizes), asked: Default::default() }
+}
+
+async fn crawl_trees(t: &Trees) -> anyhow::Result<zcrowd_core::ingest::Stats> {
+    candidates(t, t.chain.0[0].h, t.chain.0.last().unwrap().h).await.map(|r| r.1)
+}
+
+/// A one-day range like the live one of Oct 24 2026 (1297 blocks from 3527704): Sapling data in every 9th block, Orchard in
+/// every 21st, Ironwood in four of five, each with the commitments they add.
+fn day() -> Chain {
+    let mut c = chain(3_527_704, 1_297);
+    for b in &mut c.0 {
+        let has = [b.h % 9 == 0, b.h % 21 == 0, b.h % 5 != 0];
+        let adds = [3, 2, 60];
+        b.txs[0].pools = has;
+        b.commitments = std::array::from_fn(|i| if has[i] { adds[i] } else { 0 });
+    }
+    c
+}
+
+/// What an honest server says its trees hold after block `h`: a starting size plus the commitments of the blocks up to `h`.
+fn honest(c: &Chain) -> impl Fn(u64) -> Option<[u64; 3]> + Sync + 'static {
+    let adds: Vec<(u64, [u32; 3])> = c.0.iter().map(|b| (b.h, b.commitments)).collect();
+    move |h| {
+        let mut t = [1_000_000u64, 500_000, 2_000_000];
+        adds.iter().filter(|a| a.0 <= h).for_each(|a| t.iter_mut().zip(a.1).for_each(|(t, n)| *t += u64::from(n)));
+        Some(t)
+    }
+}
+
+/// The same blocks with the Ironwood data taken out, as an outdated lightwalletd serves them.
+fn without_ironwood(mut c: Chain) -> Chain {
+    c.0.iter_mut().for_each(|b| {
+        b.txs[0].pools[2] = false;
+        b.commitments[2] = 0;
+    });
+    c
+}
+
+async fn trees_err(t: &Trees) -> String {
+    format!("{:#}", crawl_trees(t).await.expect_err("the crawl must fail"))
+}
+
+// The tree states settle what the blocks alone cannot, at any length of range and for a pool as quiet as you like.
+#[tokio::test]
+async fn a_normal_one_day_range_agrees_with_the_tree_states_of_the_server() {
+    let st = crawl_trees(&with_trees(day(), honest(&day()))).await.unwrap();
+    assert!(st.commitments.iter().all(|&n| n > 0), "{:?}", st.commitments);
+    assert_eq!(st.tree_growth, Some(st.commitments));
+    assert_eq!((st.nu6_3_blocks, st.blocks), (1_297, 1_297));
+}
+
+#[tokio::test]
+async fn a_server_that_leaves_ironwood_out_of_its_blocks_is_refused_for_a_one_day_range() {
+    let honest_trees = honest(&day()); // its node's trees still grow with the Ironwood transactions
+    let e = trees_err(&with_trees(without_ironwood(day()), honest_trees)).await;
+    assert!(e.contains("blocks 3527704..3529000 hold 0 Ironwood commitments but its tree state went from 2000000 to"), "{e}");
+    assert!(e.contains("try another --server"), "{e}");
+}
+
+#[tokio::test]
+async fn one_missing_commitment_is_enough_to_refuse_a_range() {
+    let mut c = day();
+    let honest_trees = honest(&c);
+    let i = c.0.iter().position(|b| b.commitments[1] == 2).unwrap();
+    c.0[i].commitments[1] = 1;
+    let e = trees_err(&with_trees(c, honest_trees)).await;
+    assert!(e.contains("hold 123 Orchard commitments but its tree state went from 500000 to 500124"), "{e}");
+    // and trees that shrink are as wrong as trees that grow too little
+    let honest_trees = honest(&day());
+    let shrinking = move |h: u64| honest_trees(h).map(|[s, o, i]| [s, o, if h < 3_528_000 { i } else { 1_999_999 }]);
+    let e = trees_err(&with_trees(day(), shrinking)).await;
+    assert!(e.contains("Ironwood commitments but its tree state went from 2000000 to 1999999"), "{e}");
+}
+
+// An outdated lightwalletd answers an empty Ironwood tree at both ends: 0 = 0 would pass a comparison, and the crawl of
+// days of blocks would be wasted before the refusal.
+#[tokio::test]
+async fn a_server_whose_ironwood_tree_is_empty_is_refused_before_any_block_is_asked_for() {
+    let t = with_trees(without_ironwood(day()), |_| Some([5_000_000, 600_000, 0]));
+    let e = trees_err(&t).await;
+    assert!(e.contains("server returns no Ironwood data (outdated lightwalletd?)"), "{e}");
+    assert_eq!(t.asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // a range from before the pool has had time to fill is not judged by its empty tree
+    let early = chain(all_pools_from() + 100, 300);
+    assert!(crawl_trees(&with_trees(early, |_| Some([5_000_000, 600_000, 0]))).await.is_ok());
+}
+
+// A server without tree states (no GetTreeState) has only its blocks to be judged by.
+#[tokio::test]
+async fn without_tree_states_a_pool_missing_from_a_one_day_range_is_refused() {
+    let e = crawl_err(&without_ironwood(day()), 3_527_704, 3_529_000).await;
+    assert!(e.contains("server returns no Ironwood data (outdated lightwalletd?)"), "{e}");
+    let st = crawl(&day()).await.unwrap();
+    assert_eq!((st.tree_growth, st.nu6_3_blocks), (None, 1_297));
+    // a range of 1000 blocks or fewer is too short to tell a missing pool from a quiet one
+    let short = Chain(without_ironwood(day()).0[..1_000].to_vec());
+    assert!(crawl(&short).await.is_ok());
 }

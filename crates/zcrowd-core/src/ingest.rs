@@ -11,14 +11,26 @@ pub const CHUNK: u64 = 2000;
 pub const MAX_CONCURRENCY: usize = 8;
 /// A range longer than this with no shield-like or unshield-like transaction at all is refused (see `candidates`).
 const MIN_BLOCKS_WITH_CANDIDATES: usize = 100;
-/// From the activation of NU6.3 on, more blocks than this with data in some shielded pool and none in another refuses the
-/// range: the server leaves that pool out (see `candidates`).
-const MIN_BLOCKS_BEFORE_POOL_MISSING: usize = 1000;
+/// Only for a server that serves no tree states (see `tree_sizes_at_the_ends`): in a range of more blocks than this from the
+/// activation of NU6.3 on, a pool that shows no data in any of them is a pool the server leaves out (an outdated
+/// lightwalletd does not know Ironwood), and the range is refused. Every `--days` is longer (a day is 1297 blocks). Live, Oct
+/// 24 2026, 72,577 blocks: Orchard, the rarest pool, is in 11,054 of them (60 of the last 1,297) and its longest run without
+/// data is 151 blocks (3 hours); at the last day's rate, 1000 blocks without one happen by chance with probability
+/// 0.954^1000, about 3e-21, and even 3 times the longest observed run is below 1000.
+pub const MIN_BLOCKS_BEFORE_POOL_MISSING: u64 = 1000;
 const POOL_NAMES: [&str; 3] = ["Sapling", "Orchard", "Ironwood"];
+/// A pool is expected to hold commitments in a tree state from this many blocks after its activation (about 8 days).
+const POOL_WARMUP: u64 = 10_000;
 
 /// First block in which all three pools (Sapling, Orchard, Ironwood) exist: the activation of NU6.3.
 pub fn all_pools_from() -> u64 {
     MainNetwork.activation_height(NetworkUpgrade::Nu6_3).map_or(u64::MAX, |h| u64::from(u32::from(h)))
+}
+
+/// First block at which the tree of pool `i` (Sapling, Orchard, Ironwood) is expected to hold commitments.
+fn pool_filled_from(i: usize) -> u64 {
+    let nu = [NetworkUpgrade::Sapling, NetworkUpgrade::Nu5, NetworkUpgrade::Nu6_3][i];
+    MainNetwork.activation_height(nu).map_or(u64::MAX, |h| u64::from(u32::from(h))).saturating_add(POOL_WARMUP)
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +57,11 @@ pub struct Stats {
     pub nu6_3_blocks: usize,
     pub any_pool_blocks: usize,
     pub pool_blocks: [usize; 3],
+    /// Note commitments the compact blocks add to the Sapling, Orchard and Ironwood trees over the range.
+    pub commitments: [u64; 3],
+    /// How much each of those trees grew over the range according to the server's tree states, when it serves them
+    /// (it then equals `commitments`, or the range was refused).
+    pub tree_growth: Option<[u64; 3]>,
 }
 
 /// For a server as the source: heights must be consecutive from `start`, and each block's prev_hash must be
@@ -79,6 +96,8 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
     let (mut out, mut st) = (vec![], Stats::default());
     let (strict, mut prev) = (src.strict_chain(), None);
     let all_pools = all_pools_from();
+    // Asked before the crawl, so a server that does not know a pool is refused at once and not after days of blocks.
+    let trees = if strict { tree_sizes_at_the_ends(src, start, end).await? } else { None };
     let mut a = start;
     while a <= end {
         let b = (a + CHUNK - 1).min(end);
@@ -87,6 +106,7 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
                 link(&blk, &mut prev, start)?;
             }
             st.blocks += 1;
+            st.commitments.iter_mut().zip(blk.commitments).for_each(|(n, c)| *n += u64::from(c));
             let cov = st.coverage.get_or_insert(Coverage { first_h: blk.h, first_t: blk.t, last_h: blk.h, last_t: blk.t });
             cov.last_h = blk.h;
             // Block times are not monotonic (a block may be stamped earlier than its predecessor): the window's times are
@@ -126,6 +146,9 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
     if strict && prev.as_ref().map(|p| p.0) != Some(end) {
         bail!("the server stopped at block {:?} but {end} was asked for (try another --server)", prev.map(|p| p.0));
     }
+    if let Some((before, after)) = trees {
+        st.tree_growth = Some(compare_with_trees(&st.commitments, before, after, start, end)?);
+    }
     // Mainnet has dozens of these per 100 blocks; none means the server leaves shielded or transparent data out
     // Without this an empty answer would look like a complete, quiet period.
     if st.blocks > MIN_BLOCKS_WITH_CANDIDATES && st.shield_like + st.unshield_like == 0 {
@@ -135,22 +158,59 @@ pub async fn candidates<S: BlockSource>(src: &S, start: u64, end: u64) -> Result
             st.blocks
         );
     }
-    // The same for pools: from NU6.3 on all three are in use, so a long range where other pools show data and one shows
-    // none means the server leaves it out (an outdated lightwalletd does not know Ironwood). Silence would pass for a
-    // quiet pool and give a false NO MATCH.
-    // shortcut: Orchard activity is falling (about 40% fewer shields and unshields per 15 days in Oct 2026, though z-to-z
-    // blocks keep it present); a short range could one day hold no Orchard block by chance and fail here. Upgrade: judge
-    // Orchard over a longer range, or drop it from this check, once the live per-pool counts `sync` prints say so.
-    if st.any_pool_blocks > MIN_BLOCKS_BEFORE_POOL_MISSING
+    // The same for pools, for a server that serves no tree states (those settle it exactly, see `compare_with_trees`): from NU6.3
+    // on all three are in use, so a long range where one shows no data means the server leaves it out (an outdated
+    // lightwalletd does not know Ironwood). Silence would pass for a quiet pool and give a false NO MATCH.
+    // shortcut: Orchard activity is falling (60 blocks on Oct 24 2026, 3 times fewer than its 60-day average); a range could
+    // one day hold no Orchard block by chance and fail here, for a server without tree states only. Upgrade: raise
+    // MIN_BLOCKS_BEFORE_POOL_MISSING or drop Orchard from this check, once the live per-pool counts `sync` prints say so.
+    if st.tree_growth.is_none()
+        && st.nu6_3_blocks as u64 > MIN_BLOCKS_BEFORE_POOL_MISSING
         && let Some(i) = st.pool_blocks.iter().position(|&n| n == 0)
     {
         bail!(
-            "server returns no {} data (outdated lightwalletd?): {} blocks from block {all_pools} (NU6.3) on hold data of the other pools and none holds this one (try another --server)",
+            "server returns no {} data (outdated lightwalletd?): none of the {} blocks from block {all_pools} (NU6.3) on holds any (try another --server)",
             POOL_NAMES[i],
-            st.any_pool_blocks
+            st.nu6_3_blocks
         );
     }
     Ok((out, st))
+}
+
+/// The server's tree sizes (Sapling, Orchard, Ironwood) before the first block of the range and after the last, or None
+/// when it serves none. A tree that is empty although its pool has been active for long is a server that does not know the
+/// pool (an outdated lightwalletd answers an empty Ironwood tree): refused here, since 0 = 0 would pass the comparison.
+async fn tree_sizes_at_the_ends<S: BlockSource>(src: &S, start: u64, end: u64) -> Result<Option<([u64; 3], [u64; 3])>> {
+    let (Some(before), Some(after)) = (src.tree_sizes(start.saturating_sub(1)).await?, src.tree_sizes(end).await?) else {
+        return Ok(None);
+    };
+    for (i, name) in POOL_NAMES.iter().enumerate() {
+        if end >= pool_filled_from(i) && after[i] == 0 {
+            bail!(
+                "server returns no {name} data (outdated lightwalletd?): its tree state at block {end} holds no {name} commitments (try another --server)"
+            );
+        }
+    }
+    Ok(Some((before, after)))
+}
+
+/// The server's tree states come from its node, its compact blocks from its own index: when both are complete, the
+/// commitments counted in the blocks are exactly the growth of each tree over the range, whatever the length of the range
+/// and however quiet a pool is. A pool the blocks leave out (or only some of it) makes them differ.
+fn compare_with_trees(counted: &[u64; 3], before: [u64; 3], after: [u64; 3], start: u64, end: u64) -> Result<[u64; 3]> {
+    let mut grew = [0; 3];
+    for (i, name) in POOL_NAMES.iter().enumerate() {
+        grew[i] = after[i].saturating_sub(before[i]);
+        if after[i] < before[i] || grew[i] != counted[i] {
+            bail!(
+                "server's data is incomplete or inconsistent: its blocks {start}..{end} hold {} {name} commitments but its tree state went from {} to {} over the same blocks (try another --server)",
+                counted[i],
+                before[i],
+                after[i]
+            );
+        }
+    }
+    Ok(grew)
 }
 
 /// Raw transactions kept on disk (public chain data) so that decoding and `verify` work offline.

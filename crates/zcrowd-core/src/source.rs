@@ -41,6 +41,10 @@ pub struct BlockSummary {
     pub hash: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prev_hash: String,
+    /// Note commitments the block adds to the Sapling, Orchard and Ironwood trees (outputs, actions, Ironwood actions),
+    /// counted from the compact block. Absent in the committed fixtures: all 0.
+    #[serde(default)]
+    pub commitments: [u32; 3],
 }
 
 pub trait BlockSource {
@@ -49,6 +53,11 @@ pub trait BlockSource {
     async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>>;
     /// Raw transaction bytes and the height it was mined at.
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)>;
+    /// Size of the note commitment tree of each shielded pool (Sapling, Orchard, Ironwood) after block `h`, as the server's
+    /// own tree state says. None when the source has no tree state (fixtures) or the server does not serve it.
+    async fn tree_sizes(&self, _h: u64) -> Result<Option<[u64; 3]>> {
+        Ok(None)
+    }
     /// True for a server: every requested height must come back, linked by block hashes.
     /// False for sparse fixtures.
     fn strict_chain(&self) -> bool {
@@ -160,7 +169,9 @@ fn summarize(b: &CompactBlock) -> BlockSummary {
             }
         })
         .collect();
-    BlockSummary { h: b.height, t: b.time as u64, txs, hash: hex::encode(&b.hash), prev_hash: hex::encode(&b.prev_hash) }
+    let count = |f: fn(&zcash_client_backend::proto::compact_formats::CompactTx) -> usize| b.vtx.iter().map(f).sum::<usize>() as u32;
+    let commitments = [count(|t| t.outputs.len()), count(|t| t.actions.len()), count(|t| t.ironwood_actions.len())];
+    BlockSummary { h: b.height, t: b.time as u64, txs, hash: hex::encode(&b.hash), prev_hash: hex::encode(&b.prev_hash), commitments }
 }
 
 /// Longer than a cold bootstrap needs (about 30 s); a hang is not a loud failure. ZCROWD_TOR_BOOTSTRAP_SECS overrides it.
@@ -182,16 +193,17 @@ async fn tor_client(dir: &Path) -> Result<tor::Client> {
         .context("Tor bootstrap")
 }
 
-async fn retry<T, F, Fut>(what: &str, mut f: F) -> Result<T>
+/// Up to 5 attempts, 0.5 s apart at first and twice as far apart each time; "not implemented" is final at once.
+async fn retry_status<T, F, Fut>(mut f: F) -> Result<T, tonic::Status>
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, tonic::Status>>,
+    Fut: Future<Output = Result<T, tonic::Status>>,
 {
     let mut delay = Duration::from_millis(500);
     for attempt in 1..=5 {
         match f().await {
             Ok(v) => return Ok(v),
-            Err(e) if attempt == 5 => return Err(anyhow!("{what}: {e}")),
+            Err(e) if attempt == 5 || e.code() == tonic::Code::Unimplemented => return Err(e),
             Err(_) => {
                 tokio::time::sleep(delay).await;
                 delay *= 2;
@@ -199,6 +211,14 @@ where
         }
     }
     unreachable!()
+}
+
+async fn retry<T, F, Fut>(what: &str, f: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, tonic::Status>>,
+{
+    retry_status(f).await.map_err(|e| anyhow!("{what}: {e}"))
 }
 
 /// The consensus branch id a server reports for its tip must be the one this build expects at that height (hex, with or
@@ -299,6 +319,28 @@ impl BlockSource for Lwd {
         Ok((r.data, r.height))
     }
 
+    async fn tree_sizes(&self, h: u64) -> Result<Option<[u64; 3]>> {
+        let ts = match retry_status(|| {
+            let mut c = self.client.clone();
+            async move { c.get_tree_state(BlockId { height: h, hash: vec![] }).await }
+        })
+        .await
+        {
+            Ok(r) => r.into_inner(),
+            Err(e) if e.code() == tonic::Code::Unimplemented => return Ok(None),
+            Err(e) => bail!("get_tree_state: {e}"),
+        };
+        if ts.height != h {
+            bail!("get_tree_state: asked for block {h}, the server answered with block {}", ts.height);
+        }
+        let bad = |e: std::io::Error| anyhow!("get_tree_state: block {h}: {e}");
+        Ok(Some([
+            ts.sapling_tree().map_err(bad)?.size() as u64,
+            ts.orchard_tree().map_err(bad)?.size() as u64,
+            ts.ironwood_tree().map_err(bad)?.size() as u64,
+        ]))
+    }
+
     fn strict_chain(&self) -> bool {
         true
     }
@@ -371,6 +413,10 @@ impl<S: BlockSource> BlockSource for Recording<S> {
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
         self.note(format!("tx {txid}"));
         self.inner.raw_tx(txid).await
+    }
+    async fn tree_sizes(&self, h: u64) -> Result<Option<[u64; 3]>> {
+        self.note(format!("tree {h}"));
+        self.inner.tree_sizes(h).await
     }
     fn strict_chain(&self) -> bool {
         self.inner.strict_chain()

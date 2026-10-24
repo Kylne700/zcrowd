@@ -1,9 +1,12 @@
 //! Where chain data comes from: a lightwalletd server (TLS verified) or committed fixtures.
 use anyhow::{Context, Result, anyhow, bail};
-use futures::{Stream, StreamExt};
+use futures::future::BoxFuture;
+use futures::{FutureExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tonic::transport::{Channel, ClientTlsConfig, Uri};
 use zcash_client_backend::proto::compact_formats::CompactBlock;
 use zcash_client_backend::proto::service::{
@@ -87,11 +90,191 @@ pub fn require_tls(url: &str) -> Result<()> {
     Ok(())
 }
 
+type LwdClient = CompactTxStreamerClient<Channel>;
+
 pub struct Lwd {
-    client: CompactTxStreamerClient<Channel>,
+    /// The first connection: the tip, the block streams and the tree states go over it (one server state to compare).
+    client: LwdClient,
+    /// Raw transactions are spread over these connections (the first one is among them).
+    pool: Box<Pool<LwdClient>>, // boxed: a Lwd is a variant of an enum in main.rs
     pub url: String,
     /// True when every byte to the server goes through Tor.
     pub tor: bool,
+}
+
+/// Raw transactions are fetched over this many connections, each on a circuit of its own in Tor mode (one circuit set the
+/// pace of a whole sync: measured 96 to 358 KB/s across runs of the same range, and the transactions of the second half of
+/// a day are big enough, 200 KB, to be limited by it). In-flight requests are still limited to `--concurrency` in all.
+const CONNECTIONS: usize = 4;
+/// A connection older than this is replaced at its next use: S9b saw a circuit slow from 11 to 1.3 transactions a second
+/// after 35 minutes, and a fresh process fast again.
+const CONNECTION_MAX_AGE: Duration = Duration::from_secs(600);
+/// After a connection could not be made, none is tried for this long.
+const CONNECT_RETRY_AFTER: Duration = Duration::from_secs(30);
+
+pub type Connect<C> = Box<dyn Fn() -> BoxFuture<'static, Result<C>> + Send + Sync>;
+
+/// A few connections to the server. `get` gives the one with the fewest requests in flight: a slow connection holds its
+/// requests longer and so gets fewer. A connection that was given up on (`Lease::give_up`) or is older than `max_age` is
+/// replaced by a new one from `connect`, one at a time; requests already running on the old one finish there.
+pub struct Pool<C> {
+    slots: Mutex<Vec<Slot<C>>>,
+    size: usize,
+    max_age: Duration,
+    connect: Connect<C>,
+    /// Only one `get` at a time makes a connection; the others go on with the ones there are.
+    connecting: AtomicBool,
+    no_connect_before: Mutex<Instant>,
+    turn: AtomicU64,
+}
+
+struct Slot<C> {
+    conn: C,
+    born: Instant,
+    busy: Arc<AtomicUsize>,
+    bad: Arc<AtomicBool>,
+    /// When it was last given out, so that equally busy connections take turns.
+    last_turn: u64,
+}
+
+impl<C> Slot<C> {
+    fn new(conn: C, born: Instant) -> Self {
+        Slot { conn, born, busy: Arc::default(), bad: Arc::default(), last_turn: 0 }
+    }
+}
+
+/// One request's use of a connection; it counts as in flight until dropped.
+pub struct Lease<C> {
+    pub conn: C,
+    busy: Arc<AtomicUsize>,
+    bad: Arc<AtomicBool>,
+}
+
+impl<C> Lease<C> {
+    /// The request failed in a way that says the connection is bad: no new request gets it.
+    pub fn give_up(&self) {
+        self.bad.store(true, Relaxed);
+    }
+}
+
+impl<C> Drop for Lease<C> {
+    fn drop(&mut self) {
+        self.busy.fetch_sub(1, Relaxed);
+    }
+}
+
+struct Unflag<'a>(&'a AtomicBool);
+
+impl Drop for Unflag<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Relaxed);
+    }
+}
+
+impl<C: Clone> Pool<C> {
+    /// `first` is a connection already made (and checked). `size - 1` more are made at once; their ages are staggered so that
+    /// they are not all replaced together. One that cannot be made is left out and made later by `get`.
+    pub async fn start(size: usize, max_age: Duration, first: C, connect: Connect<C>) -> Pool<C> {
+        let more = futures::future::join_all((1..size).map(|_| connect())).await;
+        let now = Instant::now();
+        let slots = std::iter::once(Ok(first))
+            .chain(more)
+            .enumerate()
+            .filter_map(|(i, c)| c.ok().map(|c| Slot::new(c, now.checked_sub(max_age * i as u32 / size as u32).unwrap_or(now))))
+            .collect();
+        Pool {
+            slots: Mutex::new(slots),
+            size,
+            max_age,
+            connect,
+            connecting: false.into(),
+            no_connect_before: Mutex::new(now),
+            turn: 1.into(),
+        }
+    }
+
+    pub async fn get(&self) -> Result<Lease<C>> {
+        // shortcut: the request that makes the connection waits for it (seconds over Tor), a background task would not hold
+        // it up; upgrade if the timings show stalls at replacements.
+        if !self.connecting.swap(true, Relaxed) {
+            let _done = Unflag(&self.connecting);
+            self.maintain().await?;
+        }
+        let mut slots = self.slots.lock().unwrap();
+        let slot = slots
+            .iter_mut()
+            .filter(|x| !x.bad.load(Relaxed))
+            .min_by_key(|x| (x.busy.load(Relaxed), x.last_turn))
+            .ok_or_else(|| anyhow!("no connection to the server"))?;
+        slot.last_turn = self.turn.fetch_add(1, Relaxed);
+        slot.busy.fetch_add(1, Relaxed);
+        Ok(Lease { conn: slot.conn.clone(), busy: slot.busy.clone(), bad: slot.bad.clone() })
+    }
+
+    /// Makes one connection if one is missing (or was given up on), or else replaces one that is too old. Fails only when
+    /// there is no connection at all.
+    async fn maintain(&self) -> Result<()> {
+        // `old`: the connection to replace; `None` when one is missing.
+        let (old, empty) = {
+            let mut slots = self.slots.lock().unwrap();
+            slots.retain(|x| !x.bad.load(Relaxed));
+            let old = if slots.len() >= self.size {
+                match slots.iter().find(|x| x.born.elapsed() > self.max_age) {
+                    Some(x) => Some(x.busy.clone()),
+                    None => return Ok(()),
+                }
+            } else {
+                None
+            };
+            (old, slots.is_empty())
+        };
+        if !empty && Instant::now() < *self.no_connect_before.lock().unwrap() {
+            return Ok(());
+        }
+        match (self.connect)().await {
+            Ok(conn) => {
+                let mut slots = self.slots.lock().unwrap();
+                let new = Slot::new(conn, Instant::now());
+                match old.and_then(|old| slots.iter().position(|x| Arc::ptr_eq(&x.busy, &old))) {
+                    Some(i) => slots[i] = new,
+                    None => slots.push(new),
+                }
+                Ok(())
+            }
+            Err(e) => {
+                *self.no_connect_before.lock().unwrap() = Instant::now() + CONNECT_RETRY_AFTER;
+                if empty { Err(e) } else { Ok(()) }
+            }
+        }
+    }
+}
+
+/// `f` on a connection of the pool, retried like `retry` but each attempt on the connection `get` gives then: a request that
+/// failed because of its connection gives that connection up, so the retry is made on another one.
+pub async fn call_pooled<C, T, F, Fut>(pool: &Pool<C>, what: &str, f: F) -> Result<T>
+where
+    C: Clone,
+    F: Fn(C) -> Fut,
+    Fut: Future<Output = Result<T, tonic::Status>>,
+{
+    let f = &f;
+    retry(what, || async move {
+        let lease = pool.get().await.map_err(|e| tonic::Status::unavailable(format!("{e:#}")))?;
+        let r = f(lease.conn.clone()).await;
+        if r.as_ref().is_err_and(is_connection_error) {
+            lease.give_up();
+        }
+        r
+    })
+    .await
+}
+
+/// Errors that say something about the connection and not about what was asked for: the ones the client made up (they carry
+/// the error underneath; a server's own error, like "no such transaction", does not) and the codes meaning "try elsewhere".
+fn is_connection_error(e: &tonic::Status) -> bool {
+    use std::error::Error;
+    use tonic::Code::{Cancelled, DeadlineExceeded, Unavailable};
+    e.source().is_some() || matches!(e.code(), Unavailable | DeadlineExceeded | Cancelled)
 }
 
 /// A block stream that goes quiet this long counts as failed (tonic's request timeout ends at the response headers).
@@ -263,24 +446,50 @@ impl Lwd {
 
     async fn try_one(url: &str, tor: Option<&tor::Client>) -> Result<Lwd> {
         require_tls(url)?;
-        let mut client = match tor {
-            // The Tor branch has no direct connection in it; the channel reconnects through Tor only.
-            Some(t) => t.connect_to_lightwalletd(url.parse::<Uri>()?, false).await?,
+        let uri = url.parse::<Uri>()?;
+        // Every connection is made, and checked, the same way; in Tor mode each gets a circuit of its own, and nothing in
+        // the closure can reach the server directly.
+        let connect: Connect<LwdClient> = match tor {
+            Some(t) => {
+                let t = t.clone();
+                Box::new(move || connect_checked(Via::Tor(t.isolated_client(), uri.clone())).boxed())
+            }
             None => {
-                let ep = Channel::from_shared(url.to_string())?
-                    .tls_config(ClientTlsConfig::new().with_webpki_roots())?
-                    .connect_timeout(Duration::from_secs(10))
-                    .timeout(Duration::from_secs(60));
-                CompactTxStreamerClient::new(ep.connect().await?)
+                let url = url.to_string();
+                Box::new(move || connect_checked(Via::Direct(url.clone())).boxed())
             }
         };
-        let info = client.get_lightd_info(Empty {}).await?.into_inner();
-        if info.chain_name != "main" {
-            bail!("server reports chain {:?}, expected main", info.chain_name);
-        }
-        check_branch_id(&info.consensus_branch_id, info.block_height)?;
-        Ok(Lwd { client, url: url.to_string(), tor: tor.is_some() })
+        let client = connect().await?;
+        let (size, max_age) = if tor.is_some() { (CONNECTIONS, CONNECTION_MAX_AGE) } else { (1, Duration::from_secs(86_400)) };
+        let pool = Box::new(Pool::start(size, max_age, client.clone(), connect).await);
+        Ok(Lwd { client, pool, url: url.to_string(), tor: tor.is_some() })
     }
+}
+
+enum Via {
+    Tor(tor::Client, Uri),
+    Direct(String),
+}
+
+/// A new connection to a mainnet lightwalletd that knows the network upgrade in force.
+async fn connect_checked(via: Via) -> Result<LwdClient> {
+    let mut client = match via {
+        // The channel reconnects through Tor only.
+        Via::Tor(t, uri) => t.connect_to_lightwalletd(uri, false).await?,
+        Via::Direct(url) => {
+            let ep = Channel::from_shared(url)?
+                .tls_config(ClientTlsConfig::new().with_webpki_roots())?
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(60));
+            CompactTxStreamerClient::new(ep.connect().await?)
+        }
+    };
+    let info = client.get_lightd_info(Empty {}).await?.into_inner();
+    if info.chain_name != "main" {
+        bail!("server reports chain {:?}, expected main", info.chain_name);
+    }
+    check_branch_id(&info.consensus_branch_id, info.block_height)?;
+    Ok(client)
 }
 
 impl BlockSource for Lwd {
@@ -309,8 +518,7 @@ impl BlockSource for Lwd {
 
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
         let hash = txid_to_wire(txid)?;
-        let r = retry("get_transaction", || {
-            let mut c = self.client.clone();
+        let r = call_pooled(&self.pool, "get_transaction", |mut c| {
             let f = TxFilter { block: None, index: 0, hash: hash.clone() };
             async move { c.get_transaction(f).await }
         })
@@ -440,6 +648,18 @@ mod tests {
             "http://10.0.0.5:9067",
         ] {
             assert!(require_tls(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_errors_of_the_connection_count_as_errors_of_the_connection() {
+        let io = std::io::Error::other("connection reset by peer");
+        for bad in [tonic::Status::from_error(Box::new(io)), tonic::Status::unavailable("x"), tonic::Status::cancelled("Timeout expired")] {
+            assert!(is_connection_error(&bad), "{bad:?}");
+        }
+        // lightwalletd answers a transaction it does not have with a plain "unknown" error
+        for server in [tonic::Status::unknown("no such transaction"), tonic::Status::not_found("x"), tonic::Status::unimplemented("x")] {
+            assert!(!is_connection_error(&server), "{server:?}");
         }
     }
 

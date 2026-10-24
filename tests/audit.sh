@@ -52,10 +52,10 @@ ok "P2 check.rs, report.rs and verify.rs import no network code (no source, toni
 must_pass "P2 sandbox test" cargo test -q -p zcrowd --test cli sandbox_blocks_connections
 ok "P2 the process cuts its own network: a loopback connection works before and fails after (test sandbox_blocks_connections)"
 
-# P3: what you type is never written. Static part: only sync, report and the raw cache write files.
-W=$(git grep -lE 'fs::write|File::create|OpenOptions|create_dir|fs::rename|fs::copy|fs::remove' -- 'crates/*/src/*.rs' | sort | tr '\n' ' ')
-[ "$W" = "crates/zcrowd-core/src/ingest.rs crates/zcrowd/src/report.rs crates/zcrowd/src/sync.rs " ] || die "P3 the set of files that write has changed: $W"
-ok "P3 only ingest.rs (raw cache), report.rs (report) and sync.rs (flows) write files; check.rs and verify.rs cannot"
+# P3: what you type is never written. Static part: only sync, report, the raw cache and the Tor state directory write files.
+W=$(git grep -lE 'fs::write|File::create|OpenOptions|create_dir|DirBuilder|fs::rename|fs::copy|fs::remove' -- 'crates/*/src/*.rs' | sort | tr '\n' ' ')
+[ "$W" = "crates/zcrowd-core/src/ingest.rs crates/zcrowd-core/src/source.rs crates/zcrowd/src/report.rs crates/zcrowd/src/sync.rs " ] || die "P3 the set of files that write has changed: $W"
+ok "P3 only ingest.rs (raw cache), report.rs (report), sync.rs (flows) and source.rs (Tor state directory, sync only) write files; check.rs and verify.rs cannot"
 
 # P3 dynamic part: a fresh random address and amount, typed through stdin, must not appear in any file afterwards
 # and no file may be created at all (a transformed write would escape a content search).
@@ -229,19 +229,19 @@ echo "$IDS" | grep -qx 'Kylne700' || die "P11 commit name is not the neutral nam
 git check-ignore -q data/x && git check-ignore -q target/x || die "P11 data/ and target/ are not ignored"
 ok "P11 no home path, mail address or personal string in tracked or untracked files; $(git rev-list --count HEAD) commits, one neutral identity; no remote; data/ and target/ ignored"
 
-# T1-T4: sync goes through Tor by default and never falls back to a direct connection
+# T1-T7: sync goes through Tor by default and never falls back to a direct connection
 if unshare -rn true 2>/dev/null && command -v cc >/dev/null; then
-  must_pass "T1/T2 Tor tests" cargo test -q -p zcrowd --test tor
-  ok "T1/T2 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes nothing; --no-tor is the control the shim sees (crates/zcrowd/tests/tor.rs)"
+  must_pass "T1/T2/T5/T7 Tor tests" cargo test -q -p zcrowd --test tor
+  ok "T1/T2/T5/T7 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes nothing; --no-tor is the control the shim sees; also flag conflicts, plain-text URL refused before Tor starts, --end-height reorg margin (crates/zcrowd/tests/tor.rs)"
 else
-  skip "T1/T2 Tor failure test (needs unshare -rn and a C compiler for the leak-check shim)"
+  skip "T1/T2/T5/T7 Tor failure test (needs unshare -rn and a C compiler for the leak-check shim)"
 fi
 if [ "${LIVE:-}" = 1 ]; then
-  tests/leakcheck/run.sh "$BIN" >"$T/o" 2>&1 || { cat "$T/o" >&2; die "T3/T4 live leak check"; }
-  grep -q '^LEAKCHECK OK' "$T/o" || { cat "$T/o" >&2; die "T3/T4 live leak check did not finish"; }
-  ok "T3/T4 $(grep '^Tor sync:' "$T/o" | sed 's/^Tor sync: //'); $(grep '^Tor directory:' "$T/o" | sed 's/^Tor directory: //')"
+  tests/leakcheck/run.sh "$BIN" >"$T/o" 2>&1 || { cat "$T/o" >&2; die "T3/T4/T6 live leak check"; }
+  grep -q '^LEAKCHECK OK' "$T/o" || { cat "$T/o" >&2; die "T3/T4/T6 live leak check did not finish"; }
+  ok "T3/T4/T6 $(grep '^Tor sync:' "$T/o" | sed 's/^Tor sync: //'); $(grep '^Tor directory:' "$T/o" | sed 's/^Tor directory: //')"
 else
-  skip "T3/T4 live Tor leak check and Tor directory contents (needs the network and a C compiler: LIVE=1 bash tests/audit.sh)"
+  skip "T3/T4/T6 live Tor leak check and Tor directory contents (needs the network and a C compiler: LIVE=1 bash tests/audit.sh)"
 fi
 
 if [ "$SKIPS" -eq 0 ]; then

@@ -140,16 +140,19 @@ function verdictFor(mode, k, w) {
   if (mode === "shield" && k === 0) return "RED";
   return w < 10 ? "AMBER" : "GREEN";
 }
-function popular(mode, pool, zat, p, n) {
+// `judged` are the pools the check weighs (indexes into POOLS): its headline crowd is the one pool, or the worst of several. Every amount,
+// `zat` included, is scored as the check would score it (crowd.rs `score_pools`), so a suggestion never promises more than the check
+// shows. The amounts offered are those `pool` (the one that decided the verdict) saw entries at.
+function popular(mode, pool, judged, zat, p, n) {
   const lo = zat - Math.floor(zat / 10), hi = zat + Math.floor(zat / 10);
-  const base = Math.max(count(mode, pool, zat, p)[1], 1);
+  const base = Math.max(worst(crowds(mode, judged, zat, p)).weighted, 1);
   const from = Math.max(p.now - p.lookback * DAY, 0);
   const cands = new Set();
   for (const [t, z] of BY_POOL[pool]) if (t <= p.now && t >= from && z >= lo && z <= hi && z !== zat) cands.add(z);
   const out = [];
   for (const a of cands) {
-    const [k, weighted] = count(mode, pool, a, p);
-    if (weighted > base) out.push({ zat: a, k, weighted, verdict: verdictFor(mode, k, weighted) });
+    const { k, weighted, verdict } = worst(crowds(mode, judged, a, p));
+    if (weighted > base) out.push({ zat: a, k, weighted, verdict });
   }
   out.sort((a, b) => b.weighted - a.weighted || Math.abs(a.zat - zat) - Math.abs(b.zat - zat) || a.zat - b.zat);
   return out.slice(0, n);
@@ -160,18 +163,20 @@ const worst = (cs) => cs.slice(1).reduce((a, b) => (RANK[b.verdict] > RANK[a.ver
 // The pools a check scores (indexes into POOLS; crowd.rs `pools_for`). A shield cannot go into Orchard: from NU6.3 on no value may
 // enter that pool (ZIP 258), so its crowd is empty for good and would make every shield RED.
 const targets = (mode) => (mode === "shield" ? [0, 2] : [0, 1, 2]);
+// One crowd per pool of `pools` (indexes into POOLS) at `zat`.
+const crowds = (mode, pools, zat, p) => pools.map((i) => { const [k, weighted] = count(mode, i, zat, p); return { pool: POOLS[i], k, weighted, verdict: verdictFor(mode, k, weighted) }; });
 const ORCHARD_SHIELD = "A shield cannot go into Orchard: from NU6.3 on no value may enter that pool (ZIP 258). Choose Sapling, Ironwood or Not sure.";
 // `pool` is a name from POOLS, or "any": score every pool of the mode and take the worst.
 function check(mode, zat, p, pool = "any") {
   if (mode === "shield" && pool === "orchard") throw new Error(ORCHARD_SHIELD);
-  const pools = targets(mode).map((i) => { const [k, weighted] = count(mode, i, zat, p); return { pool: POOLS[i], k, weighted, verdict: verdictFor(mode, k, weighted) }; });
+  const pools = crowds(mode, targets(mode), zat, p);
   const c = pool === "any" ? worst(pools) : pools.find((o) => o.pool === pool);
   const i = POOLS.indexOf(c.pool);
   const matches = BY_POOL[i].filter(([t, z]) => inScope(mode, zat, p, t, z)).sort((a, b) => b[0] - a[0] || a[3] - b[3]).slice(0, 10).map(([t, z, , rank]) => ({ t, zat: z, rank }));
   return {
     pool: c.pool, k: c.k, weighted: c.weighted, verdict: c.verdict, odd_amount: sigDecimals(zat) >= 5, matches, pools,
     other_pools_k: pools.reduce((n, o) => n + (o.pool === c.pool ? 0 : o.k), 0),
-    suggestions: c.verdict === "GREEN" ? [] : popular(mode, i, zat, p, 5),
+    suggestions: c.verdict === "GREEN" ? [] : popular(mode, i, pool === "any" ? targets(mode) : [i], zat, p, 5),
   };
 }
 

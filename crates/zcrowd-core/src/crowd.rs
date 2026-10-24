@@ -409,7 +409,7 @@ mod tests {
             assert_eq!(score(&evs, user, u64::MAX, &big).k, 2);
             let want: &[usize] = if user == Kind::Shield { &[2, 0] } else { &[2, 0, 0] };
             assert_eq!(score_pools(&evs, user, X, &big).iter().map(|c| c.k).collect::<Vec<_>>(), want);
-            let _ = crate::suggest::popular(&evs, user, Pool::Sapling, u64::MAX, &big, 5);
+            let _ = crate::suggest::popular(&evs, user, Pool::Sapling, &[Pool::Sapling], u64::MAX, &big, 5);
         }
         // the lookback reaches back to the start of time and no further
         assert_eq!(count(&evs, Kind::Unshield, X, &Params { now: 5, ..big }).0, 0);

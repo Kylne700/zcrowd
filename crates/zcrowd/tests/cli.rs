@@ -323,6 +323,88 @@ fn shield_mode_weighs_only_the_pools_a_shield_can_go_into() {
     assert_eq!(j["pools"].as_array().unwrap().len(), 3, "{j}");
 }
 
+/// `n` more shields of `zat` into `pool`, numbered on from `*i`.
+fn shields(v: &mut Vec<String>, i: &mut u64, pool: &str, zat: u64, n: u64) {
+    for _ in 0..n {
+        *i += 1;
+        v.push(line_in("shield", pool, zat, *i, ""));
+    }
+}
+
+/// The result of one `check --json` at `amount` (mode is `--unshield` or `--shield`).
+fn check_json(f: &str, mode: &str, amount: &str, pool: &str) -> serde_json::Value {
+    let (ok, out, err) = run(&["check", mode, "-", "--pool", pool, "--json", "--data", f], Some(&format!("{amount}\n")));
+    assert!(ok, "{err}");
+    serde_json::from_str(&out).unwrap()
+}
+
+/// Every suggestion of the check at `amount` must be what the check itself says when asked at the suggested amount with the
+/// same settings (its k, weighted and verdict). Returns how many suggestions were compared.
+fn every_suggestion_is_what_its_own_check_says(f: &str, mode: &str, amount: &str, pool: &str) -> usize {
+    let j = check_json(f, mode, amount, pool);
+    let suggestions = j["suggestions"].as_array().unwrap();
+    for s in suggestions {
+        let zat = s["zat"].as_u64().unwrap();
+        let at = format!("{}.{:08}", zat / 100_000_000, zat % 100_000_000);
+        let own = check_json(f, mode, &at, pool);
+        for key in ["k", "weighted", "verdict"] {
+            assert_eq!(
+                s[key], own[key],
+                "{mode} {amount} --pool {pool}: the suggestion {at} says {key}={} but checking {at} says {}\n{j}\n{own}",
+                s[key], own[key]
+            );
+        }
+    }
+    suggestions.len()
+}
+
+// research/46 F2: under `--pool any` the suggestions were scored in the one pool that decided the verdict, so a "GREEN"
+// suggestion could be RED the moment the user checked that amount (and checking it suggested the first amount back, a loop).
+// Fixture B: 2.0 ZEC went into Sapling once and Ironwood 20 times; 2.1 ZEC into Sapling 15 times and Ironwood once; 1.95 ZEC
+// into both 12 times.
+#[test]
+fn under_any_a_suggestion_is_scored_the_way_the_check_scores_that_amount() {
+    let (mut v, mut i) = (Vec::new(), 0);
+    for (zat, sapling, ironwood) in [(200_000_000, 1, 20), (210_000_000, 15, 1), (195_000_000, 12, 12)] {
+        shields(&mut v, &mut i, "sapling", zat, sapling);
+        shields(&mut v, &mut i, "ironwood", zat, ironwood);
+    }
+    let d = data_file("cli-fixture-b.ndjson", &v);
+    let f = d.to_str().unwrap();
+    let suggested = |amount: &str, pool: &str| -> Vec<(u64, u64, String)> {
+        let j = check_json(f, "--unshield", amount, pool);
+        j["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| (s["zat"].as_u64().unwrap(), s["k"].as_u64().unwrap(), s["verdict"].to_string()))
+            .collect()
+    };
+    // 2.0: Sapling k=1 is the worst pool. 2.1 would be GREEN in Sapling but is RED in Ironwood (k=1): not a way out.
+    assert_eq!(suggested("2.0", "any"), vec![(195_000_000, 12, "\"GREEN\"".to_string())]);
+    // 2.1: Ironwood k=1 is the worst pool. 2.0 would be GREEN in Ironwood but is RED in Sapling.
+    assert_eq!(suggested("2.1", "any"), vec![(195_000_000, 12, "\"GREEN\"".to_string())]);
+    let (_, out, _) = run(&["check", "--unshield", "-", "--data", f], Some("2.0\n"));
+    assert!(out.contains("  1.95000000 ZEC -> crowd 12 (weighted 12.0, GREEN)") && !out.contains("2.10000000 ZEC"), "{out}");
+    // one pool alone is judged alone, as before: a Sapling user does gain from 2.1
+    assert_eq!(suggested("2.0", "sapling").iter().map(|s| s.0).collect::<Vec<_>>(), vec![210_000_000, 195_000_000]);
+    assert_eq!(suggested("2.1", "ironwood").iter().map(|s| s.0).collect::<Vec<_>>(), vec![200_000_000, 195_000_000]);
+    // the rule behind it, on this fixture and on the sample: whatever is suggested is what checking that amount reports
+    let mut compared = 0;
+    for pool in ["any", "sapling", "orchard", "ironwood"] {
+        for amount in ["2.0", "2.1", "1.97"] {
+            compared += every_suggestion_is_what_its_own_check_says(f, "--unshield", amount, pool);
+        }
+    }
+    assert!(compared >= 10, "only {compared} suggestions were compared on the fixture");
+    let sample = format!("{}/../../fixtures/flows-sample.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let on_sample: usize = [("--unshield", "1.23456789"), ("--unshield", "2.5"), ("--shield", "2.5")]
+        .iter()
+        .map(|(mode, amount)| every_suggestion_is_what_its_own_check_says(&sample, mode, amount, "any"))
+        .sum();
+    assert!(on_sample > 0, "the sample gave no suggestion to compare");
+}
+
 // The process cuts its own network. A listener on loopback is reachable from this process but not from the probe once it
 // is in the sandbox. On Linux the seccomp layer answers first (the socket itself is refused: "Operation not permitted"; the
 // empty namespace alone would say "Network is unreachable"); on macOS the no-network profile. Windows has no sandbox.

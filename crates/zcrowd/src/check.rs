@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
 use zcrowd_core::Kind;
-use zcrowd_core::crowd::{AddrFinding, Crowd, DAY, Params, Verdict, address_check, score_pools, worse, worst};
+use zcrowd_core::crowd::{AddrFinding, Crowd, DAY, Params, Verdict, address_check, pools_for, score_pools, worse, worst};
 use zcrowd_core::decode::{Via, destination, hides_crossing};
 use zcrowd_core::model::{Event, Pool, coinbase_tag, fmt_utc, fmt_zec, load, parse_zec};
 use zcrowd_core::suggest::popular;
@@ -108,7 +108,9 @@ pub fn run(a: Args) -> Result<()> {
     let p = Params { lookback_days: a.lookback_days, tol_zat: a.tol_zat, fee_allowance_zat: a.fee_allowance_zat, now };
     let crowds = score_pools(&events, user, zat, &p);
     let c = a.pool.pick(&crowds);
-    let sugg = if matches!(c.verdict, Verdict::Green) { vec![] } else { popular(&events, user, c.pool, zat, &p, 5) };
+    // Suggestions are judged as the check judges: by the worst of the pools shown under `any`, by the one pool otherwise.
+    let judged = if a.pool == PoolArg::Any { pools_for(user) } else { std::slice::from_ref(&c.pool) };
+    let sugg = if matches!(c.verdict, Verdict::Green) { vec![] } else { popular(&events, user, c.pool, judged, zat, &p, 5) };
     let addr = to.as_ref().map(|d| address_check(&events, &d.taddr, now));
     let overall = addr.as_ref().map_or(c.verdict, |f| worse(c.verdict, addr_verdict(f)));
     // entries into the other pools: an observer reaches them only through a visible move between pools

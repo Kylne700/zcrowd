@@ -160,6 +160,12 @@ synth.push(into("mixed", "shield", zec(25), 1, { confidence: "low" }), into("iro
 // ties between pools: 26 ZEC entered each pool twice; 27 ZEC entered Orchard and Ironwood twice, Sapling never
 for (const pool of POOLS) for (let i = 0; i < 2; i++) synth.push(into(pool, "shield", zec(26), i));
 for (const pool of ["orchard", "ironwood"]) for (let i = 0; i < 2; i++) synth.push(into(pool, "move", zec(27), i));
+// pools that disagree (research/46 F2): 200 ZEC entered Sapling once and Ironwood 20 times, 210 ZEC Sapling 15 times and Ironwood once,
+// 195 ZEC both 12 times
+for (const [a, sapling, ironwood] of [[200, 1, 20], [210, 15, 1], [195, 12, 12]]) {
+  for (let i = 0; i < sapling; i++) synth.push(into("sapling", "shield", zec(a), i));
+  for (let i = 0; i < ironwood; i++) synth.push(into("ironwood", "shield", zec(a), i));
+}
 const cov = { version: 2, first_h: 3_000_000, first_t: T - 31 * DAY, last_h: 3_000_000 + n, last_t: T };
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zcrowd-parity-"));
 try {
@@ -169,7 +175,7 @@ try {
   const sp = load(render(template, pageData(synth, cov)), synth);
   const k = { 10: 4, 20: 10, 30: 9, 40: 20, 50: 0, 60: 1, 70: 1, 80: 0, 90: 15 }; // Sapling only
   const P = { lookback: 30, tol: 0, fee: 50000, now: T };
-  for (const a of [10, 20, 30, 40, 40.5, 50, 60, 70, 80, 90, 25, 26, 27]) {
+  for (const a of [10, 20, 30, 40, 40.5, 50, 60, 70, 80, 90, 25, 26, 27, 195, 200, 210]) {
     for (const pool of POOL_SETTINGS) {
       for (const mode of ["unshield", "shield"]) {
         for (const c of [{}, { look: 7 }, { look: 14 }, { tol: zec(0.5) }, { fee: 0 }, { tol: 3, fee: 1 }]) {
@@ -200,6 +206,27 @@ try {
   assert.equal(sp.check("unshield", zec(26), P).pool, "sapling"); // same verdict and weight in every pool: the first pool
   assert.equal(sp.check("unshield", zec(27), P).pool, "orchard"); // Sapling has no match, Orchard and Ironwood tie
   assert.equal(sp.check("shield", zec(27), P).pool, "sapling"); // nobody else entered Sapling with 27: RED in shield mode (Ironwood has 2: AMBER)
+  // under `any` a suggestion is the worst of the pools, as the check of that amount reports it: 210 is GREEN in Sapling but RED in
+  // Ironwood, so it is no way out of 200 (Sapling k=1); one pool alone is judged alone
+  const sugg = (a, pool) => sp.check("unshield", zec(a), P, pool).suggestions.map((x) => [x.zat, x.k, x.verdict]);
+  assert.deepEqual(sugg(200, "any"), [[zec(195), 12, "GREEN"]]);
+  assert.deepEqual(sugg(210, "any"), [[zec(195), 12, "GREEN"]]);
+  assert.deepEqual(sugg(200, "sapling").map((x) => x[0]), [zec(210), zec(195)]);
+  assert.deepEqual(sugg(210, "ironwood").map((x) => x[0]), [zec(200), zec(195)]);
+  // ... and always what checking the suggested amount says (page only: the Rust side is compared above)
+  let judged = 0;
+  for (const [pg, mode, amounts] of [[sp, "unshield", [200, 210, 197, 25, 26, 60, 40.5]], [sp, "shield", [200, 210, 197, 25, 26, 60]], [page, "unshield", [1.23456789, 2.5, 3.3, 1.2497]], [page, "shield", [1.23456789, 2.5]]]) {
+    for (const a of amounts) for (const pool of POOL_SETTINGS) {
+      if (mode === "shield" && pool === "orchard") continue;
+      const settings = { lookback: 30, tol: 0, fee: 50000, now: pg.now };
+      for (const x of pg.check(mode, zec(a), settings, pool).suggestions) {
+        const own = pg.check(mode, x.zat, settings, pool);
+        assert.deepEqual([x.k, x.weighted, x.verdict], [own.k, own.weighted, own.verdict], `${mode} ${a} ${pool}: suggestion ${fmt(x.zat)}`);
+        judged++;
+      }
+    }
+  }
+  assert.ok(judged > 30, `only ${judged} suggestions were compared with their own check`);
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }

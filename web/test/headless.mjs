@@ -192,6 +192,12 @@ async function privacy(browser, origin, url) {
   assert.match(verdicts["1.23456789"].note, /easy to recognise later/);
   assert.ok(verdicts["1.23456789"].note.includes(missing), verdicts["1.23456789"].note);
   await scan("AMBER");
+  // the first suggestion promises what typing that amount shows (research/46 F2): crowd and verdict are the worst of the three pools
+  const first = (await page.locator("#sugg li").first().innerText()).match(/^(\d+\.\d{8}) ZEC -> crowd (\d+) \(weighted (\d+\.\d), (GREEN|AMBER|RED)\)$/);
+  assert.ok(first, "no suggestion line for 1.23456789");
+  await amount.fill(first[1]);
+  assert.match(await page.locator("#crowd").innerText(), new RegExp(`^${first[2]} .* weighted ${first[3].replace(".", "\\.")}`));
+  assert.equal((await page.locator("#verdict").innerText()).trim(), first[4]);
   // a typed value that has a big crowd in two pools: one line per pool, then each pool on its own
   await amount.fill("1.2497");
   await amount.press("Enter");

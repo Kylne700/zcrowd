@@ -18,7 +18,7 @@ contract() {
 cargo fmt --check >"$T/fmt" 2>&1 || { head -20 "$T/fmt" >&2; die "cargo fmt --check (run cargo fmt)"; }
 ok "cargo fmt --check"
 cargo build -q
-BIN=$PWD/target/debug/zcrowd
+BIN=${CARGO_TARGET_DIR:-$PWD/target}/debug/zcrowd
 cargo clippy -q --all-targets -- -D warnings >"$T/clippy" 2>&1 || { head -30 "$T/clippy" >&2; die "cargo clippy -D warnings"; }
 ok "cargo clippy --all-targets -D warnings"
 cargo test -q >"$T/test.out" 2>&1 || { tail -40 "$T/test.out" >&2; die "cargo test"; }

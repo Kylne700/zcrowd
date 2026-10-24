@@ -22,7 +22,7 @@ must_pass() {
 }
 
 cargo build -q
-BIN=${ZCROWD_BIN:-$PWD/target/debug/zcrowd}
+BIN=${ZCROWD_BIN:-${CARGO_TARGET_DIR:-$PWD/target}/debug/zcrowd}
 DATA=fixtures/flows-sample.ndjson
 TXID=954c19b2c73e667170c28b8d3a94fd96582cba736a5ed7275a10fc0c3e64e149
 ok "build"
@@ -210,7 +210,7 @@ fi
 if ! git grep -q '<form' -- "$H"; then :; else die "P10 the page has a <form>"; fi
 ok "P10 web/index.html: CSP with connect-src, form-action, base-uri none; no external reference; no network, storage or navigation API in its script; no <form>"
 if command -v node >/dev/null; then
-  node web/test/parity.mjs >"$T/o" 2>&1 || { tail -20 "$T/o" >&2; die "P10 JS/Rust parity"; }
+  ZCROWD_BIN="$BIN" node web/test/parity.mjs >"$T/o" 2>&1 || { tail -20 "$T/o" >&2; die "P10 JS/Rust parity"; }
   ok "P10 $(grep '^PARITY OK' "$T/o")"
   node web/build.mjs >/dev/null 2>&1 && git diff --quiet -- web/index.html || die "P10 web/index.html is not what web/build.mjs produces"
   ok "P10 web/index.html equals what web/build.mjs builds from the template and the committed sample"

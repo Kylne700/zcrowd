@@ -138,8 +138,14 @@ pub fn run(a: Args) -> Result<()> {
     }
     notes.extend(clock_warning(wall, cov.last_t));
     // The newest block is where the data ends: a verdict that rests on finding nothing (NO MATCH) or one entry (RED) can
-    // still be overturned by shields after it, so these two always say so, however fresh the data is.
-    let after_end = matches!(overall, Verdict::NoMatch | Verdict::Red)
+    // still be overturned by shields after it, so these two always say so, however fresh the data is. Under `--pool any` that
+    // holds for every pool shown, not only the worst one: GREEN outranks NO MATCH, so a pool without an entry never becomes the
+    // verdict and its caveat would never show (research/46 F1). Not for Orchard: nothing can enter it from NU6.3 on (ZIP 258),
+    // so later blocks cannot change its crowd.
+    // shortcut: data that ends before NU6.3 is not special-cased, Orchard is left out of this line for it too.
+    let rests_on_missing = |v: Verdict, pool: Pool| pool != Pool::Orchard && matches!(v, Verdict::NoMatch | Verdict::Red);
+    let shown = if a.pool == PoolArg::Any { &crowds[..] } else { std::slice::from_ref(c) };
+    let after_end = (shown.iter().any(|o| rests_on_missing(o.verdict, o.pool)) || rests_on_missing(overall, c.pool))
         .then(|| format!("shields after {} (last synced block) are not counted", fmt_utc(cov.last_t)));
 
     if a.json {

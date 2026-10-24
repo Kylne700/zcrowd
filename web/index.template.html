@@ -175,6 +175,11 @@ function check(mode, zat, p, pool = "any") {
   };
 }
 
+// check.rs `after_end`: a pool's NO MATCH (no entry) or RED (one entry) can be overturned by shields after the last block. Every pool
+// shown counts, not only the worst (GREEN outranks NO MATCH, so a pool without an entry never becomes the verdict); Orchard does
+// not: nothing can enter it from NU6.3 on (ZIP 258), so later blocks cannot change its crowd.
+const restsOnMissing = (r, pool = "any") => (pool === "any" ? r.pools : [r]).some((o) => o.pool !== "orchard" && (o.verdict === "NO MATCH" || o.verdict === "RED"));
+
 // ---- page ----
 if (typeof document !== "undefined") {
   const $ = (id) => document.getElementById(id);
@@ -228,7 +233,7 @@ if (typeof document !== "undefined") {
     put($("pool-note"), r.other_pools_k + " entries of about this amount went into the other pools: linkable only through a visible pool move; not counted." + (pool === "any" ? " Funds in another pool? Choose the pool above for a precise answer." : ""));
     const notes = [];
     if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
-    if (r.verdict === "NO MATCH" || r.verdict === "RED") notes.push("Note: shields after " + fmtUtc(c.last_t) + " (last synced block) are not counted.");
+    if (restsOnMissing(r, pool)) notes.push("Note: shields after " + fmtUtc(c.last_t) + " (last synced block) are not counted.");
     if (c.last_t - c.first_t < p.lookback * DAY) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: an entry of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
     put($("note"), notes.join(" "));
     $("matches").replaceChildren(); $("sugg").replaceChildren();

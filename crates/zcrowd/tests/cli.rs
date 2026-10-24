@@ -605,6 +605,37 @@ fn the_amount_typed_is_never_printed_back() {
     }
 }
 
+// research/46 F1: under `--pool any` GREEN outranks NO MATCH, so a pool with no entry never becomes the verdict and its caveat
+// never showed (a user whose own shield landed after the last block saw GREEN and nothing else). The line now follows every pool
+// shown. Orchard is left out: nothing can enter it from NU6.3 on (ZIP 258), so later blocks cannot change its crowd.
+#[test]
+fn under_any_the_missing_shields_line_follows_every_pool_shown_except_orchard() {
+    let line_after = "shields after 2026-09-21 14:13 UTC (last synced block) are not counted";
+    // 12 shields of 1.2345 ZEC into Sapling, none into Ironwood or Orchard: Sapling GREEN, the others NO MATCH
+    let sapling: Vec<String> = (1..=12).map(|i| line("shield", 123_450_000, i, "")).collect();
+    let d = data_file("cli-any-end1.ndjson", &sapling);
+    let f = d.to_str().unwrap();
+    let (ok, out, err) = run(&["check", "--unshield", "-", "--data", f], Some("1.2345\n"));
+    assert!(ok, "{err}");
+    assert!(out.contains("verdict: GREEN") && out.contains("pool ironwood: k=0 weighted=0.0 -> NO MATCH"), "{out}");
+    assert!(out.contains(&format!("\n{line_after}\n")), "{out}");
+    let (_, js, _) = run(&["check", "--unshield", "-", "--json", "--data", f], Some("1.2345\n"));
+    let j: serde_json::Value = serde_json::from_str(&js).unwrap();
+    assert!(j["notes"].as_array().unwrap().iter().any(|n| n == line_after), "{j}");
+    // a pool chosen on its own is judged on its own: its GREEN says nothing about the others
+    let (_, out, _) = run(&["check", "--unshield", "-", "--pool", "sapling", "--data", f], Some("1.2345\n"));
+    assert!(out.contains("verdict: GREEN") && !out.contains("(last synced block)"), "{out}");
+    // only Orchard has no entry: no line, under `any` and when chosen
+    let both: Vec<String> = sapling.iter().cloned().chain((13..=24).map(|i| line_in("shield", "ironwood", 123_450_000, i, ""))).collect();
+    let d = data_file("cli-any-end2.ndjson", &both);
+    let f = d.to_str().unwrap();
+    let (ok, out, _) = run(&["check", "--unshield", "-", "--data", f], Some("1.2345\n"));
+    assert!(ok && out.contains("verdict: GREEN") && out.contains("pool orchard: k=0 weighted=0.0 -> NO MATCH"), "{out}");
+    assert!(!out.contains("(last synced block)"), "{out}");
+    let (ok, out, _) = run(&["check", "--unshield", "-", "--pool", "orchard", "--data", f], Some("1.2345\n"));
+    assert!(ok && out.contains("verdict: NO MATCH") && !out.contains("(last synced block)"), "{out}");
+}
+
 #[test]
 fn no_match_and_red_say_that_shields_after_the_last_block_are_not_counted() {
     let line_after = "\nshields after 2026-09-21 14:13 UTC (last synced block) are not counted\n";

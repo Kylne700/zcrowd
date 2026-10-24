@@ -183,12 +183,14 @@ async function privacy(browser, origin, url) {
     verdicts[typed] = { verdict: (await page.locator("#verdict").innerText()).trim(), note: (await page.locator("#note").innerText()).trim() };
   }
   // "Not sure" (the default) scores all three pools and shows the worst: 1.0 ZEC has no crowd in Sapling or Orchard
-  // but 162 entries into Ironwood
+  // but 162 entries into Ironwood. A pool without an entry is NO MATCH, which GREEN outranks, so the missing-shields line has
+  // to follow every pool shown (research/46 F1): Sapling is NO MATCH for 1.0 and for 1.23456789 (Orchard never counts)
+  const missing = `shields after ${LAST_UTC} (last synced block) are not counted`;
   assert.equal(verdicts["1.0"].verdict, "GREEN");
-  assert.equal(verdicts["1.0"].note, "");
+  assert.equal(verdicts["1.0"].note, `Note: ${missing}.`);
   assert.equal(verdicts["1.23456789"].verdict, "AMBER");
   assert.match(verdicts["1.23456789"].note, /easy to recognise later/);
-  assert.doesNotMatch(verdicts["1.23456789"].note, /shields after/);
+  assert.ok(verdicts["1.23456789"].note.includes(missing), verdicts["1.23456789"].note);
   await scan("AMBER");
   // a typed value that has a big crowd in two pools: one line per pool, then each pool on its own
   await amount.fill("1.2497");
@@ -197,6 +199,8 @@ async function privacy(browser, origin, url) {
   assert.match(await page.locator("#crowd").innerText(), /^157 earlier shields and moves into sapling \(the worst of the three pools\) of about 1\.24970000 ZEC .* weighted 114\.5/);
   assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=157 weighted=114.5 -> GREEN", "pool orchard: k=0 weighted=0.0 -> NO MATCH", "pool ironwood: k=592 weighted=437.0 -> GREEN"]);
   assert.match(await page.locator("#pool-note").innerText(), /^592 entries of about this amount went into the other pools: linkable only through a visible pool move; not counted\./);
+  // only Orchard has no entry here, and no later block can add one (ZIP 258): no missing-shields line
+  assert.doesNotMatch(await page.locator("#note").innerText(), /shields after/);
   const poolPick = {};
   for (const pool of ["ironwood", "orchard", "sapling"]) {
     await page.locator("#pool").selectOption(pool);
@@ -210,7 +214,7 @@ async function privacy(browser, origin, url) {
   assert.match(poolPick.sapling.crowd, /^157 earlier shields and moves into sapling of about /);
   await page.locator("#pool").selectOption("any");
   // NO MATCH and RED say which shields are missing (the CLI prints the same words); GREEN and AMBER do not
-  const examples = {}, missing = `shields after ${LAST_UTC} (last synced block) are not counted`;
+  const examples = {};
   for (const want of ["GREEN", "AMBER", "RED", "NO MATCH"]) {
     await page.locator(`button[data-ex="${want}"]`).click();
     examples[want] = [await amount.inputValue(), (await page.locator("#verdict").innerText()).trim()];

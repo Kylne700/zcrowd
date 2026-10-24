@@ -31,9 +31,9 @@ function load(html, events) {
   vm.runInContext(scripts[0][1], ctx);
   const ev = (code) => vm.runInContext(code, ctx);
   const plain = (x) => JSON.parse(JSON.stringify(x)); // drop the other realm's prototypes
-  const [parse, check] = [ev("parseZec"), ev("check")];
+  const [parse, check, missing] = [ev("parseZec"), ev("check"), ev("restsOnMissing")];
   const order = pageEntries(events).map((e) => e.txid); // the page keeps no txids, only each match's rank in this list
-  return { parse, check: (...a) => plain(check(...a)), now: ev("NOW"), txids: (r) => r.matches.map((m) => order[m.rank]) };
+  return { parse, check: (...a) => plain(check(...a)), missing, now: ev("NOW"), txids: (r) => r.matches.map((m) => order[m.rank]) };
 }
 
 function cli(data, mode, amount, c) {
@@ -48,6 +48,7 @@ function cli(data, mode, amount, c) {
 
 let compared = 0;
 const ties = { sample: 0, synthetic: 0 }; // comparisons whose listed matches include two with the same time
+const missingLine = { yes: 0, no: 0 }; // comparisons with and without the "shields after ... are not counted" line
 function same(page, data, label, mode, amount, c = {}) {
   const want = cli(data, mode, amount, c);
   const settings = { lookback: c.look ?? 30, tol: c.tol ?? 0, fee: c.fee ?? 50000, now: page.now };
@@ -61,6 +62,10 @@ function same(page, data, label, mode, amount, c = {}) {
   const got = page.check(mode, page.parse(amount), settings, c.pool ?? "any");
   const view = (r, matches) => ({ pool: r.pool, k: r.k, weighted: r.weighted, verdict: r.verdict, odd_amount: r.odd_amount, matches, pools: r.pools, other_pools_k: r.other_pools_k, suggestions: r.suggestions });
   assert.deepStrictEqual(view(got, page.txids(got)), view(want, want.matches), `${label}: ${mode} ${amount} ${JSON.stringify(c)}`);
+  // the line about shields after the last block: the page decides it from the same pools as the CLI (research/46 F1)
+  const wantLine = want.notes.some((n) => /^shields after .* \(last synced block\) are not counted$/.test(n));
+  assert.equal(page.missing(got, c.pool ?? "any"), wantLine, `${label}: missing-shields line, ${mode} ${amount} ${JSON.stringify(c)}`);
+  missingLine[wantLine ? "yes" : "no"]++;
   compared++;
   if (got.matches.some((m, i) => i > 0 && m.t === got.matches[i - 1].t)) ties[label === "synthetic" ? label : "sample"]++;
   return got;
@@ -199,5 +204,6 @@ try {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 assert.ok(ties.synthetic > 0, "no synthetic comparison listed two matches of the same time");
+assert.ok(missingLine.yes > 0 && missingLine.no > 0, `the missing-shields line was only ever ${missingLine.yes ? "present" : "absent"}`);
 
 console.log(`PARITY OK: ${compared} JS-vs-Rust comparisons (${amounts} sample amounts, ${invalid.length} rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (${ties.sample} sample and ${ties.synthetic} synthetic comparisons with a time tie)`);

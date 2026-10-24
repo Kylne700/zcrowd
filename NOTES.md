@@ -120,11 +120,13 @@ Evidence by finding (`cargo test --workspace` runs every test named here; the e2
 | S3-4 coinbase is `CompactTx.index == 0` | `candidate_kinds_cover_coinbase_and_moves`, `decode_coinbase_shield_into_ironwood` |
 | E11, E12, E13, E14, E15 | `e11_ironwood_only_shield_is_counted`, `e12_other_pools_are_not_counted_and_any_is_the_worst_pool`, `e13_a_move_into_ironwood_is_a_candidate_for_an_ironwood_unshield` (and `decode_move_into_ironwood`), `decode_two_pool_unshield_e14`, `e15_a_shielded_coinbase_is_an_entry` (and `shielded_coinbase_entries_in_the_sample_are_counted`) |
 
-Left for the next stage, not touched: S1-4, S2-1, S2-2, S2-3, S3-1, S3-3, S3-5, S3-6, S3-7, S4.
+Left for the next stage: S1-4, S2-1, S2-2, S2-3, S3-1, S3-3, S3-6 and the code items of S4 were done in the
+review-fix stage below; S3-5, S3-7 and the other S4 items are text or web changes (written down for the docs and web
+stages).
 
 NOT VERIFIED in this stage: the five new fixtures were not compared with an explorer (the 20 explorer-checked events were);
-the server's version or pool support is not read, so a server that leaves out only one pool is not detected; Firefox and
-Safari; a 30-day sync over Tor.
+the server's version or pool support is not read, so a server that leaves out only one pool was not detected (the
+review-fix stage added a check for that); Firefox and Safari; a 30-day sync over Tor (timed in the review-fix stage).
 
 ## Final run (after the last code commit, d5d3939)
 
@@ -168,6 +170,130 @@ E2E OK
 
 `PLAYWRIGHT_CORE=<playwright-core dir> LIVE=1 bash tests/audit.sh` alone: `AUDIT OK`, exit code 0, 161 s, no `SKIP` line.
 Not run in this stage: the audit with a mutated page or guard (done once in S5, recorded above), Firefox, Safari.
+
+## Review-fix stage (the remaining code findings of the review and the plan's must-have items)
+
+The independent review of the build at 8914192 also had findings that the Ironwood stage did not take ("Left for the
+next stage" above), and the plan added must-have items for the CLI (M2, M3, M5, M6, Q9) and two checks on what a
+lightwalletd server sends. This stage fixed all of them that live in Rust code, tests and the shell tests; each change was
+broken on purpose once and the test named here had to fail (one exception, noted below). What needs words in README.md
+and docs/PRIVACY.md was written down for the docs stage, not edited here.
+
+| finding | what changed | tests |
+|---|---|---|
+| S1-4 the id given to `verify` sits in argv | `verify -` reads it privately; an id in the arguments prints a note; the advice after MATCH says to spot-check random events and to open the explorer over Tor | `verify_reads_the_id_from_stdin_notes_one_in_the_arguments_and_advises_spot_checks` |
+| S2-1 the sandbox proof could not fail | a Linux test: `check`, `report` and `verify` must each be in their own network namespace before they read their data file | `check_report_and_verify_each_leave_the_network_before_they_read_anything` |
+| S2-2 the amount was echoed back | the header, amount parse errors and address errors never repeat what was typed | `the_amount_typed_is_never_printed_back`, `parse_errors_never_repeat_the_text`, `cli_check_shield_mode_and_address_reuse` |
+| S2-3 `--json` lacked what the text has | data window, its age, short-window flag, the not-covered footer, per-pool lines and the notes | `json_carries_the_data_window_its_age_the_footer_and_the_notes` |
+| S3-1 a NO MATCH or RED ignores new shields | both always say `shields after <time> UTC (last synced block) are not counted` | `no_match_and_red_say_that_shields_after_the_last_block_are_not_counted` |
+| S3-3 skipped transactions were invisible | the meta keeps a count per reason; `check` prints one line, and a warning when a reason could hide a shield or unshield | `check_says_what_the_sync_skipped_and_whether_it_matters`, `skipped_counts_add_up_and_unrecorded_stays_unrecorded` |
+| S3-6 no bounds on numbers | `--lookback-days` 1..=3650, `--days` 1..=3650, `--tolerance-zat` and `--fee-allowance-zat` at most 1 ZEC; `u64::MAX` neither panics nor wraps | `numeric_options_have_limits_and_huge_values_are_refused_not_crashed`, `huge_parameters_neither_panic_nor_overflow`, `the_margin_is_five_percent_with_a_floor_and_never_overflows` |
+| S4-1 6 h of silent slack in the short-window warning | gone; `sync` fetches 5% more blocks than asked (at least 144) so the same lookback is not found a hair short | `a_window_shorter_than_the_lookback_is_a_short_window_without_slack`, `a_span_an_hour_short_of_30_days_does_not_read_as_30_days` |
+| S4-2 / M3 a crash between the two files | temp files, the events first and the meta last, the old meta removed before; `flows.lock` stops two syncs on one output | `a_save_that_stops_between_the_two_renames_leaves_no_window_to_trust`, `a_save_that_fails_before_the_events_are_replaced_keeps_the_old_pair`, `a_second_sync_on_the_same_output_is_refused_while_the_first_holds_the_lock` |
+| S4-3 a corrupt cached transaction stopped the sync | it is fetched again and overwritten | `a_corrupt_cache_file_is_fetched_again_and_overwritten` |
+| S4-4 `TEX1...` in capitals | accepted (ZIP 320 allows it); base58 and mixed case stay refused | `decode_tex_in_capitals_is_accepted_but_base58_and_mixed_case_are_not` |
+| S4-8 a vacuous assert | the bad address is typed first and must not come back in the error | `cli_check_shield_mode_and_address_reuse` |
+| S4-12 `now` was the last block's time | the window's times are the earliest and latest block time seen | `the_windows_times_are_the_extremes_of_the_block_times_not_those_of_its_edge_blocks` |
+| M2 data format version | the meta has `version: 2`; `check`, `report` and `verify` refuse any other (or a meta that does not parse) | `a_meta_without_this_version_is_refused`, `check_and_report_refuse_data_without_this_format_version`, `sync_replaces_data_of_another_version_and_stores_the_format_version_and_skipped_counts` |
+| M5 `--to` with a Unified Address | its transparent receiver is checked; a note says a wallet normally pays the shielded one; a UA without a transparent receiver is refused with a reason | `a_unified_address_is_checked_through_its_transparent_receiver` (core and CLI, the CLI one also proves it is never printed back), `a_unified_address_without_a_transparent_receiver_says_it_does_not_leave_the_shielded_pools` |
+| M6 clock sanity | `check` warns when the clock is more than 3 hours behind or a year ahead of the newest block | `the_clock_is_wrong_beyond_three_hours_behind_or_a_year_ahead_of_the_newest_block`, `a_clock_far_off_the_chain_is_reported` |
+| a server that leaves one pool out | from NU6.3 on, more than 1000 blocks with data in some pool and none in another refuses the range; the consensus branch id of the tip must be the one expected at its height | `a_server_that_leaves_a_pool_out_is_refused_after_the_activation_of_nu6_3`, `blocks_before_the_activation_of_nu6_3_do_not_count_for_the_pool_check`, `the_branch_id_of_the_tip_must_be_the_one_expected_at_that_height` |
+| Q9 a first Tor start and a long sync looked like a hang | stderr says `starting Tor; the first run can take a minute`, then the block range, blocks done with a percent and the transactions fetched (heights and counts only) | `progress_prints_about_twenty_lines_for_any_size_and_ends_at_one_hundred`, `sync_reports_its_progress_on_stderr_with_heights_and_counts_only`, `tor_failure_is_loud_and_never_goes_direct` |
+
+The one change a test does not pin: the `TEX1` prefix guard in `decode::destination` (a base58 string lowercased fails its
+checksum anyway, so the guard is belt and braces). `tests/audit.sh` P3 now lists `model.rs` among the files that write
+(called by `sync` only) and P11 accepts the project's own GitHub remote and no other.
+
+The live leak check (`tests/leakcheck/run.sh`, audit T3/T4/T6) synced `--days 0`, which the new limit refuses. It now
+syncs one day, the shortest range. To keep the Tor leg to a few minutes it starts from the direct leg's transaction
+cache minus 20 files, asserts that it fetched at least one transaction, and still asks for the tip, every block and 20
+transactions through Tor. The byte-identity of the two outputs therefore proves the blocks and only those 20
+transactions, not all of them.
+
+Decisions worth a reviewer's eye:
+- M3 is read as: after a crash `check` sees either the old matching pair of files or an explicit refusal ("no coverage
+  file ... run `zcrowd sync` again"), never a window that claims more blocks than the events hold. It is not read as
+  "the interrupted sync can be resumed".
+- A Unified Address given to `--to` is judged by its transparent receiver only, because that is what an unshield to it
+  would use; ZIP 316 says a wallet prefers the shielded receiver, and the output says so. Uppercase `U1...` is still refused.
+- Orchard after NU6.3 (3,428,143): no rule found in the Orchard and zcash_primitives crates or in ZIP 2005 stops value
+  from entering Orchard, but the builder can no longer pay another person's Orchard address (cross-address output is
+  off in the V3 Orchard pool: orchard-0.16.0 `src/lib.rs:196-198`, `src/builder.rs:1004-1026` and `1374-1379`;
+  zcash_primitives-0.31.0 `src/transaction/builder.rs:407-411` switches off only the coinbase builder). ZIP 2005
+  (status Proposed) says wallets SHOULD move funds to Ironwood. The sample's 0 shields into Orchard in 30 days fits
+  that, but the reason is an inference; the consensus code of zebrad and zcashd was not read. `check --pool orchard`
+  needs no special message and has none.
+- The pool check is a shortcut with two limits. It fires only when more than 1000 blocks hold data in some pool, so a
+  range of about a day or less is not protected (the 1-day live run had 150 Sapling, 64 Orchard and 783 Ironwood
+  blocks: at most 997 with any, which is below it). And Orchard activity is falling, so in the future even a long range
+  might hold no Orchard block and be refused; the comment in `ingest.rs` says when to revisit it.
+
+### Measured sync times (release build, 2026-10-24, server `zec.rocks`)
+
+The release binary (`cargo build --release -p zcrowd`, 1 min 13 s) synced about one day (1297 blocks, 2134 to 2188
+candidate transactions) three times, each into an empty output directory. The machine was shared with other work (load
+average 2 to 12 on 20 cores), so these show what a run looks like, not a clean benchmark. "Ready" is the time from
+starting the program to the connection being up (for Tor: the Tor start, with its state directory new or kept).
+
+| run | ready | 1297 blocks | transactions | total |
+|---|---|---|---|---|
+| Tor, new state directory | 22 s | 101 s | 2188 in 743 s (2.9 per second) | 14 min 26 s |
+| Tor, state directory kept from the run above | 5 s | 132 s | 2159 in 434 s (5.0 per second) | 9 min 31 s |
+| `--no-tor` | 1 s | 2.6 s | 2134 in 60 s (36 per second) | 63 s |
+
+A 30-day sync over Tor (`--days 30`, the state directory of the runs above, an empty output directory): the 36,289 blocks took 777 s (13 min), then the 75,522 candidate transactions came at 10 to 15 per second. The
+run was still going when this was written: 12,916 transactions after 32 minutes, so the whole run is projected at about
+2 h 15 min (NOT VERIFIED until it finishes).
+
+Over Tor the speed varied a lot between runs of the same size: the transactions came at 2.9, 5.0 and 10 to 15 per second,
+and 2000 blocks took 16 to 85 s per request (median 33 s over 19 requests). With at most 8 requests in flight that is
+0.5 to 2.7 s per transaction request. What sets the pace (the circuit, the exit relay, the server) was not tested. The
+README's earlier "a one-day sync took 20 to 40 s over Tor" (nine runs, debug build) does not match these runs; the ranges
+and candidate counts of those runs are not recorded here (a day holds about 2100 candidates now).
+
+### Final run (review-fix stage, last code commit a29b5d3)
+
+Real output of `PLAYWRIGHT_CORE=<playwright-core dir> LIVE=1 bash tests/e2e.sh` (it runs `tests/audit.sh` with the same
+`LIVE=1`) on 2026-10-24, all 32 lines, nothing removed or condensed; exit code 0, 629 s in all (network: the live
+one-day sync and the Tor leak check). It ran in a fresh clone of that commit with one clone-only commit on top: the web
+fix that belongs to the web stage (`version: 2` in the synthetic meta of `web/test/parity.mjs`, and `web/index.html`
+rebuilt). Without it two checks fail on this branch: the parity test (the Rust side now refuses a meta without a
+version) and P10 (the page embeds the sample's meta, which gained `version` and `skipped`, so it must be rebuilt).
+
+```
+ok    cargo fmt --check
+ok    cargo clippy --all-targets -D warnings
+ok    cargo test: 96 tests passed, 0 failed
+ok    offline sync from fixtures: 3 events, range ends at tip-10 (3522630), 3 of 3 txids recomputed, 0 mismatches
+ok    check: one verdict line and one crowd line each time, a line per pool; 1.0 GREEN (ironwood k=162); 1.2497 k=157 weighted=114.5 GREEN (text and --json); --pool; 125 ZEC Sapling k=40 vs Ironwood NO MATCH; the Ironwood-only round trip is found; 3.73 k=1 RED; --to a shield source address RED (text and --json overall verdict)
+ok    report on the committed sample: 17827 unshields in the last 14 days = NO MATCH 3642 (20.4%), RED 1405 (7.9%), as the README says
+ok    verify of a fixture transaction: MATCH (decoded from the cached raw bytes, offline)
+ok    example five_lines prints: crowd 592 -> GREEN
+ok    LIVE one-day sync: transaction id recomputed from the raw bytes for 2138 of 2138 candidates, 0 did not match (dropped); block hash chain checked over 1297 blocks
+ok    build
+ok    P1 sync requests depend only on the block range (test sync_requests_depend_only_on_range)
+ok    P2 check, report and verify run with the network removed from outside (unshare -rn)
+ok    P2 check.rs, report.rs and verify.rs import no network code (no source, tonic, tokio, std::net, Lwd, sockets)
+ok    P2 the process cuts its own network: a loopback connection works before and fails after (test sandbox_blocks_connections)
+ok    P3 only ingest.rs (raw cache), model.rs (the flows files, called by sync only), report.rs (report), sync.rs (lock file) and source.rs (Tor state directory, sync only) write files; check.rs and verify.rs cannot
+ok    P3 random address and amount typed via stdin and arguments: not in any file, no file created, neither echoed in the output (text, --json, --shield, arguments)
+ok    P4 no mnemonic, seed, viewing-key or ufvk anywhere in crates/
+ok    P5 525 crate versions in cargo tree (624 packages in Cargo.lock), none of reqwest, sentry, posthog, segment, openssl, native-tls, analytics, telemetry, update; Cargo.lock tracked
+ok    P6 sync --server http://... is refused before any connection (run with the network removed)
+ok    P6 a local TLS server with a self-signed certificate is rejected (invalid peer certificate: UnknownIssuer)
+ok    P7 flows file keys, cache file names and the directory listing contain only public chain fields
+ok    P8 wrong txid dropped and counted, broken prevHash and gaps are errors (tests wrong_or_broken_transactions_are_dropped_counted_and_never_cached, broken_block_chain_is_an_error, block_chain_is_checked_across_request_chunks)
+ok    P9 report HTML has no src, href, url(), http(s), @import or script
+ok    P10 web/index.html: CSP with connect-src, form-action, base-uri none; no external reference; no network, storage or navigation API in its script; no <form>
+ok    P10 PARITY OK: 760 JS-vs-Rust comparisons (128 sample amounts, 20 rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions
+ok    P10 web/index.html equals what web/build.mjs builds from the template and the committed sample
+ok    P10 headless Chromium: zero requests while typing, CSP blocks injected fetch, image, beacon, WebSocket and form (http:// and file://)
+ok    P11 no home path, mail address or personal string in tracked or untracked files; 34 commits, one neutral identity; no remote but the project's own; data/ and target/ ignored
+ok    T1/T2/T5/T7 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes no output; --no-tor is the control the shim sees; also flag conflicts, plain-text URL refused before Tor starts, --end-height reorg margin (crates/zcrowd/tests/tor.rs)
+ok    T3/T4/T6 lookups (any name)=0, lookups of the server name=0, connects to server IPs=0, port-53 sends=0, distinct connect destinations (Tor relays)=8; through Tor: the tip, every block and 20 transactions; 6 files, all arti directory data, guard state or locks; 0 mention the server name
+AUDIT OK
+E2E OK
+```
 
 ## Deviations from the first design (and why)
 
@@ -215,7 +341,9 @@ Not run in this stage: the audit with a mutated page or guard (done once in S5, 
 18. The audit numbers claims P1..P11 (docs/PRIVACY.md), adds "no file is created by
     `check`" (stamp-file test), a leak-detector canary, and runs the plain-text refusal under `unshare -rn`.
 19. Commit trailers: S1..S3 carry the Opus 5.5 co-author trailer, S4 onward the Sonnet 5.5 one (instruction changed
-    between stages). Author and committer are the neutral identity in every commit; no remote exists.
+    between stages). Author and committer are the neutral identity in every commit; no remote existed until the lead
+added the project's own private GitHub remote `origin`. The agents never push, and audit P11 now accepts that one URL and
+no other remote.
 20. Review follow-up (one commit after the S5 commit), real bug: `check --json --to <address>` printed the verdict of the
     amount alone, so a reused address showed a false GREEN in JSON while the text said RED. Fixed in `check.rs`:
     `verdict` is now the overall one (the worse of amount and address), and `amount_verdict` and `address_verdict`
@@ -237,15 +365,23 @@ Not run in this stage: the audit with a mutated page or guard (done once in S5, 
 
 ## NOT VERIFIED
 
-- `sync` over Tor on macOS and Windows, on networks that block Tor, for a 30-day range, and from servers other than
-  `zec.rocks`; the cause of one hang in an early Tor sync. macOS, Windows. Firefox and Safari for the web demo.
-- Release-build behaviour and speed (only the debug profile was built).
+- `sync` over Tor on macOS and Windows, on networks that block Tor, and from servers other than `zec.rocks` (the first
+  connection to another host through a freshly started Tor timed out at the exit once); the cause of one hang in an
+  early Tor sync. macOS, Windows. Firefox and Safari for the web demo.
+- Release-build behaviour: the release binary was built and ran the timed syncs of the review-fix stage; the tests and
+  the e2e run use the debug profile only.
 - P2SH input-address detection beyond the t3 sources seen in the sample. Whether a lightwalletd server offers all three
-  pools: `sync` fails only when a range of more than 100 blocks returns no candidate at all, so a server that leaves out
-  just one pool is not detected.
+  pools: since the review-fix stage `sync` refuses a range in which, from NU6.3 on, more than 1000 blocks hold data in some
+  pool and none holds data in another. A range of about a day or less is below that and not protected, and a server
+  that leaves a pool out for only part of the range is not noticed.
+- The consensus side of the Orchard finding above (zebrad and zcashd were not read). The oldest Rust that builds it:
+  the dependencies declare 1.90 (`typed-index-collections`, through arti); it was built here with 1.97.1 only. Whether
+  the sandbox tests and audit P2 run on a CI runner: Ubuntu 24.04 can set `kernel.apparmor_restrict_unprivileged_userns=1`,
+  which breaks `unshare` of a user namespace (no CI run has happened).
 - A lightwalletd server that lies consistently (compact blocks carry no proof of work). Independence of the default
   servers: `na.zec.rocks` and `eu.zec.rocks` share the domain of `zec.rocks` and are probably one operator (their output
-  was byte-identical once). Cold-sync time (a run with nothing cached; the measured 2,048 s had 6,227 of 67,977 transactions cached and went direct, not over Tor). The link between two sync runs (deviation 23).
+  was byte-identical once). Cold-sync time of 30 days without Tor (the measured 2,048 s had 6,227 of 67,977 transactions cached; the Tor runs are in
+  "Measured sync times"). The link between two sync runs (deviation 23).
 - Packet-level behaviour of `sync`: a live one-day sync was sampled with `ss` (34 polls, filtered to the process id).
   Peers seen: the chosen server on 443 and the DNS resolver on UDP 53. Sampling can miss short-lived sockets. (A first
   attempt filtered by process name also matched the parallel Tor agent's `zcrowd` process: always filter by pid.)
@@ -255,8 +391,8 @@ Not run in this stage: the audit with a mutated page or guard (done once in S5, 
 
 - `web/index.html` needs hosting (publishing is the lead's job). README and PRIVACY.md say nothing about a URL.
 - Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
-  it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it), so a 30-day sync over
-  Tor is still not timed.
+  it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage
+  timed Tor syncs of one and of 30 days (see "Measured sync times").
 - The sample goes stale: after 2026-10-24 about 15:05 UTC `check` on it prints stale-data warnings (the README says so).
 - `data/` (1.5 GB on disk, 67,977 raw transactions plus the events file, gitignored) from the 30-day sync is left in
   the working tree, and `target/debug/zcrowd` is a fresh build for the video agent.

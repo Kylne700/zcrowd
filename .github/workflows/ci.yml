@@ -1,0 +1,233 @@
+name: CI
+
+# test      build and test on Linux, macOS and Windows. While the repository is private a push to the ci branch tests
+#           Linux only (macOS and Windows minutes cost more); master, main, pull requests and "Run workflow" with
+#           all_os ticked test all three.
+# e2e       Linux: tests/e2e.sh (fmt, build, clippy -D warnings, every test, the real binary on the committed fixtures)
+#           and then tests/audit.sh (privacy claims, JS-vs-Rust parity, headless page test).
+# browsers  the web page in Chromium, Firefox and WebKit.
+# deny      cargo-deny with deny.toml: advisories, licences, bans, sources.
+# Offline on purpose: fixtures only, no lightwalletd, no Tor network.
+
+on:
+  push:
+    branches: [ci, master, main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      all_os:
+        description: Also test on macOS and Windows
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A push does not cancel a manual run and the other way round.
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: "1.97.1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_NET_RETRY: "10"
+  RUSTUP_MAX_RETRIES: "10"
+  RUST_BACKTRACE: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.all_os && '["ubuntu-latest","macos-latest","windows-latest"]' || github.ref_name == 'ci' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+    steps:
+      # The fixtures are compared byte for byte, so Git must not turn LF into CRLF on Windows.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Rust ${{ env.RUST_VERSION }}
+        id: rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_VERSION"
+          home="${CARGO_HOME:-$HOME/.cargo}"
+          if command -v cygpath >/dev/null; then home=$(cygpath -m "$home"); fi
+          echo "cargo_home=$home" >> "$GITHUB_OUTPUT"
+          rustc -Vv
+          cargo -V
+
+      - name: Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.rust.outputs.cargo_home }}/registry/index
+            ${{ steps.rust.outputs.cargo_home }}/registry/cache
+            ${{ steps.rust.outputs.cargo_home }}/git/db
+            target
+          key: cargo-${{ runner.os }}-test-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-test-${{ env.RUST_VERSION }}-
+
+      # The Linux sandbox and Tor tests unshare a user namespace; Ubuntu 24.04 blocks that unless this is switched off.
+      - name: Allow user namespaces
+        if: runner.os == 'Linux'
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      # libsqlite3-sys links the system SQLite (Linux and macOS have one, Windows does not) and finds it through vcpkg.
+      - name: SQLite for the Windows link
+        if: runner.os == 'Windows'
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install sqlite3:x64-windows-static-md
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      - name: Cargo.lock is up to date
+        run: cargo fetch --locked
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo test --locked --no-fail-fast
+
+  e2e:
+    name: fmt, clippy, tests and audit (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out (whole history, because the audit checks every commit author)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # tests/audit.sh P11 requires a repository without a remote.
+      - name: Remove the remote
+        run: git remote remove origin
+
+      - name: Rust ${{ env.RUST_VERSION }}
+        id: rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_VERSION"
+          echo "cargo_home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
+          rustc -Vv
+          cargo -V
+
+      - name: Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.rust.outputs.cargo_home }}/registry/index
+            ${{ steps.rust.outputs.cargo_home }}/registry/cache
+            ${{ steps.rust.outputs.cargo_home }}/git/db
+            target
+          key: cargo-${{ runner.os }}-e2e-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-e2e-${{ env.RUST_VERSION }}-
+
+      - name: Allow user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Playwright (Chromium, for the headless test inside the audit)
+        working-directory: web/test
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright-core install --with-deps chromium
+
+      - name: Cargo.lock is up to date
+        run: cargo fetch --locked
+
+      - name: Format, build, clippy, tests, real binary on the fixtures, audit
+        env:
+          PLAYWRIGHT_CORE: ${{ github.workspace }}/web/test/node_modules/playwright-core
+        run: bash tests/e2e.sh
+
+  browsers:
+    name: web page in ${{ matrix.browser }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Playwright and ${{ matrix.browser }}
+        working-directory: web/test
+        env:
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright-core install --with-deps "$BROWSER"
+
+      - name: Headless test
+        env:
+          BROWSERS: ${{ matrix.browser }}
+        run: node web/test/headless.mjs
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      # A pinned release, checked against its SHA-256 before it runs; no third-party action.
+      - name: Install cargo-deny 0.20.2
+        run: |
+          v=0.20.2
+          f="cargo-deny-$v-x86_64-unknown-linux-musl"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/$f.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$v/$f.tar.gz"
+          echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  $RUNNER_TEMP/$f.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$RUNNER_TEMP/$f.tar.gz" -C "$HOME/.local/bin" --strip-components=1 "$f/cargo-deny"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Advisories, licences, bans, sources
+        run: cargo deny --locked check

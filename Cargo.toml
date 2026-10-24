@@ -5,6 +5,8 @@ members = ["crates/zcrowd-core", "crates/zcrowd"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# Checked: cargo +1.90.0 check --workspace --all-targets --locked. Arti (typed-index-collections 3.5.0) needs 1.90.
+rust-version = "1.90"
 license = "MIT"
 
 [profile.release]

@@ -2,6 +2,7 @@
 name = "zcrowd"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Check how big a crowd your Zcash unshield (or shield) amount hides in"
 

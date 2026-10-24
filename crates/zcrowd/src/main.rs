@@ -8,7 +8,7 @@ mod verify;
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use zcrowd_core::crowd::DEFAULT_FEE_ALLOWANCE;
+use zcrowd_core::crowd::{DEFAULT_FEE_ALLOWANCE, MAX_LOOKBACK_DAYS, MAX_SLACK_ZAT};
 use zcrowd_core::source::{DEFAULT_SERVERS, Fixtures, Lwd, require_tls};
 
 #[derive(Parser)]
@@ -22,7 +22,9 @@ struct Cli {
 enum Cmd {
     /// Crawl public chain data from one lightwalletd server and write shield/unshield events.
     Sync {
-        #[arg(long, default_value_t = 30)]
+        /// Days of history to fetch (1 to 3650). About 5% more blocks are fetched (at least 3 hours' worth), so that
+        /// `check` with the same lookback does not find the window a hair short.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=MAX_LOOKBACK_DAYS))]
         days: u64,
         /// lightwalletd URL (repeatable; first that answers as mainnet is used).
         #[arg(long)]
@@ -66,12 +68,14 @@ enum Cmd {
         /// Transparent address you plan to unshield to (t1, t3 or tex1), or `-` to type it privately.
         #[arg(long)]
         to: Option<String>,
-        #[arg(long, default_value_t = 30)]
+        /// How far back an earlier shield still counts as a match, in days (1 to 3650).
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=MAX_LOOKBACK_DAYS))]
         lookback_days: u64,
-        #[arg(long, default_value_t = 0)]
+        /// Also match amounts this many zatoshi off, in both directions (0 to 100000000, which is 1 ZEC).
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=MAX_SLACK_ZAT))]
         tolerance_zat: u64,
-        /// Extra room above the amount for the fee paid out of the shielded note.
-        #[arg(long, default_value_t = DEFAULT_FEE_ALLOWANCE)]
+        /// Extra room above the amount for the fee paid out of the shielded note, in zatoshi (0 to 100000000, which is 1 ZEC).
+        #[arg(long, default_value_t = DEFAULT_FEE_ALLOWANCE, value_parser = clap::value_parser!(u64).range(0..=MAX_SLACK_ZAT))]
         fee_allowance_zat: u64,
         #[arg(long, default_value = "data/flows.ndjson")]
         data: PathBuf,

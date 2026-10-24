@@ -55,8 +55,10 @@ ok "P2 the process cuts its own network: a loopback connection works before and 
 
 # P3: what you type is never written. Static part: only sync, report, the raw cache and the Tor state directory write files.
 W=$(git grep -lE 'fs::write|File::create|OpenOptions|create_dir|DirBuilder|fs::rename|fs::copy|fs::remove' -- 'crates/*/src/*.rs' | sort | tr '\n' ' ')
-[ "$W" = "crates/zcrowd-core/src/ingest.rs crates/zcrowd-core/src/source.rs crates/zcrowd/src/report.rs crates/zcrowd/src/sync.rs " ] || die "P3 the set of files that write has changed: $W"
-ok "P3 only ingest.rs (raw cache), report.rs (report), sync.rs (flows) and source.rs (Tor state directory, sync only) write files; check.rs and verify.rs cannot"
+[ "$W" = "crates/zcrowd-core/src/ingest.rs crates/zcrowd-core/src/model.rs crates/zcrowd-core/src/source.rs crates/zcrowd/src/report.rs crates/zcrowd/src/sync.rs " ] || die "P3 the set of files that write has changed: $W"
+S=$(git grep -lE '\bsave(_with)?\(' -- 'crates/*/src/*.rs' | sort | tr '\n' ' ')
+[ "$S" = "crates/zcrowd-core/src/model.rs crates/zcrowd/src/sync.rs " ] || die "P3 something besides sync calls the function that writes the flows files: $S"
+ok "P3 only ingest.rs (raw cache), model.rs (the flows files, called by sync only), report.rs (report), sync.rs (lock file) and source.rs (Tor state directory, sync only) write files; check.rs and verify.rs cannot"
 
 # P3 dynamic part: a fresh random address and amount, typed through stdin, must not appear in any file afterwards
 # and no file may be created at all (a transformed write would escape a content search).
@@ -96,15 +98,15 @@ typed check --unshield "$AMT" --to "$ADDR" --data "$DATA" >"$T/t4" 2>&1 || die "
 grep -q '^verdict: ' "$T/t1" && grep -q '^crowd: k=' "$T/t1" || die "P3 check printed no verdict"
 for f in t1 t2 t3 t4; do
   if grep -qF -e "$ADDR" -e "$H160" "$T/$f"; then die "P3 the address was echoed in the output ($f)"; fi
+  if grep -qF -e "$AMT" -e "$ZAT" "$T/$f"; then die "P3 the typed amount was echoed in the output ($f)"; fi
 done
-if grep -qF -e "$AMT" -e "$ZAT" "$T/t2"; then die "P3 the typed amount is in the --json output"; fi
 grep -q 'shell history' "$T/t4" || die "P3 passing values as arguments printed no warning"
 if scan . ':!target'; then die "P3 a typed value was written into the repository tree"; fi
 if scan "$T/env"; then die "P3 a typed value was written into the fresh HOME, TMPDIR or XDG directories"; fi
 [ -z "$(find "$T/env" -type f)" ] || die "P3 files appeared in the fresh HOME, TMPDIR or XDG directories"
 NEW=$(find . -newer "$T/stamp" -type f -not -path './target/*' -not -path './.git/*' | head -5)
 [ -z "$NEW" ] || die "P3 check created or changed files: $NEW"
-ok "P3 random address and amount typed via stdin and arguments: not in any file, no file created, address not echoed, not in --json"
+ok "P3 random address and amount typed via stdin and arguments: not in any file, no file created, neither echoed in the output (text, --json, --shield, arguments)"
 
 # P4: key material is never read
 if git grep -nEi 'mnemonic|seed|ufvk|viewing' -- crates; then die "P4 key-material words in crates/"; fi

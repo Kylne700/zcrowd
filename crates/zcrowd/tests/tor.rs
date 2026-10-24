@@ -18,7 +18,7 @@ fn ok(c: &mut Command) -> bool {
 
 fn offline_sync(extra: &[&str]) -> Output {
     Command::new(BIN)
-        .args(["sync", "--days", "0", "--candidates-only"])
+        .args(["sync", "--days", "1", "--candidates-only"])
         .args(extra)
         .env("ZCROWD_OFFLINE", "1")
         .env("ZCROWD_FIXTURES", format!("{ROOT}/fixtures"))
@@ -90,7 +90,8 @@ fn tor_flags_conflict_and_offline_mode_never_starts_tor() {
 #[test]
 fn end_height_pins_the_range_and_respects_the_reorg_margin() {
     let o = offline_sync(&["--end-height", "3522000"]);
-    assert!(String::from_utf8_lossy(&o.stdout).contains("range=3521856..3522000"), "{o:?}");
+    // one day is 1152 blocks plus the margin of 144
+    assert!(String::from_utf8_lossy(&o.stdout).contains("range=3520704..3522000"), "{o:?}");
     let o = offline_sync(&["--end-height", "9999999"]);
     assert!(String::from_utf8_lossy(&o.stdout).contains("..3522630 "), "{o:?}");
     assert!(String::from_utf8_lossy(&o.stderr).contains("reorg margin"), "{o:?}");

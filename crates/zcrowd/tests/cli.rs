@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const BIN: &str = env!("CARGO_BIN_EXE_zcrowd");
 const T: u64 = 1_790_000_000;
@@ -24,6 +25,19 @@ fn meta(extra: &str) -> String {
         zcrowd_core::model::FORMAT_VERSION,
         T - 31 * 86_400
     )
+}
+
+/// A meta whose newest block is from `last_t` and whose window covers `span` seconds.
+fn meta_at(last_t: u64, span: u64) -> String {
+    format!(
+        r#"{{"version":{},"first_h":3499000,"first_t":{},"last_h":3500100,"last_t":{last_t}}}"#,
+        zcrowd_core::model::FORMAT_VERSION,
+        last_t - span
+    )
+}
+
+fn wall() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
 fn data_file_meta(name: &str, lines: &[String], meta: Option<&str>) -> std::path::PathBuf {
@@ -302,4 +316,203 @@ fn a_second_sync_on_the_same_output_is_refused_while_the_first_holds_the_lock() 
     drop(held);
     let (ok, stdout, err) = offline_sync(&out);
     assert!(ok && out.exists(), "{stdout} {err}");
+}
+
+/// `check --unshield` on one shield of 1.00015 ZEC and the given meta, amount 1.0 (found: RED) or `amount`; text or JSON.
+fn check_with_meta(name: &str, meta: &str, json: bool) -> String {
+    let d = data_file_meta(name, &[line("shield", 100_015_000, 1, "")], Some(meta));
+    let mut args = vec!["check", "--unshield", "-", "--pool", "sapling", "--data", d.to_str().unwrap()];
+    args.extend(json.then_some("--json"));
+    let (ok, out, err) = run(&args, Some("1.0\n"));
+    assert!(ok, "{err}");
+    out
+}
+
+// The amount is typed privately; nothing the command prints may bring it back (scrollback, CI logs).
+#[test]
+fn the_amount_typed_is_never_printed_back() {
+    // no shield near this amount, so no match line can carry it either
+    let d = data_file("cli-noecho.ndjson", &[line("shield", 200_000_000, 1, "")]);
+    let f = d.to_str().unwrap();
+    let (amt, zat) = ("1.24975318", "124975318");
+    let clean = |out: &str, err: &str, what: &str| {
+        for s in [out, err] {
+            assert!(!s.contains(amt) && !s.contains(zat) && !s.contains("1.2497"), "{what}: {out} {err}");
+        }
+    };
+    for (what, args) in [
+        ("unshield", vec!["check", "--unshield", "-", "--data", f]),
+        ("unshield json", vec!["check", "--unshield", "-", "--json", "--data", f]),
+        ("shield", vec!["check", "--shield", "-", "--pool", "orchard", "--data", f]),
+    ] {
+        let (ok, out, err) = run(&args, Some(&format!("{amt}\n")));
+        assert!(ok && out.contains("NO MATCH") | out.contains("RED"), "{what}: {out} {err}");
+        clean(&out, &err, what);
+    }
+    // given as an argument it is warned about, but not repeated
+    let (ok, out, err) = run(&["check", "--unshield", amt, "--data", f], None);
+    assert!(ok && err.contains("shell history"), "{err}");
+    clean(&out, &err, "argument");
+    // typed wrong: the error says what is wrong, not what was typed
+    for bad in ["1.2497531x", "1.249753189", "-1.24975318", "124975318.24975318", "99999999999999999999.24975318"] {
+        let (ok, out, err) = run(&["check", "--unshield", "-", "--data", f], Some(&format!("{bad}\n")));
+        assert!(!ok && !err.is_empty(), "{bad}");
+        assert!(!out.contains("1.2497") && !err.contains("1.2497") && !err.contains("24975318"), "{bad}: {out} {err}");
+    }
+}
+
+#[test]
+fn no_match_and_red_say_that_shields_after_the_last_block_are_not_counted() {
+    let line_after = "\nshields after 2026-09-21 14:13 UTC (last synced block) are not counted\n";
+    let f = |name: &str, lines: &[String]| data_file(name, lines);
+    let check = |d: &std::path::Path, mode: &str, amt: &str, extra: &[&str]| {
+        let mut args = vec!["check", mode, "-", "--pool", "sapling", "--data", d.to_str().unwrap()];
+        args.extend(extra);
+        let (ok, out, err) = run(&args, Some(&format!("{amt}\n")));
+        assert!(ok, "{err}");
+        out
+    };
+    // NO MATCH and RED: always, even though this data is as fresh as it can be for the verdict itself
+    let none = f("cli-end1.ndjson", &[line("shield", 200_000_000, 1, "")]);
+    let out = check(&none, "--unshield", "1.0", &[]);
+    assert!(out.contains("verdict: NO MATCH") && out.contains(line_after), "{out}");
+    let one = f("cli-end2.ndjson", &[line("shield", 100_015_000, 1, "")]);
+    let out = check(&one, "--unshield", "1.0", &[]);
+    assert!(out.contains("verdict: RED") && out.contains(line_after), "{out}");
+    let out = check(&none, "--shield", "1.0", &[]);
+    assert!(out.contains("verdict: RED") && out.contains(line_after), "{out}");
+    // AMBER and GREEN: not said
+    let two: Vec<String> = (1..=2).map(|i| line("shield", 100_000_000, i, "")).collect();
+    let out = check(&f("cli-end3.ndjson", &two), "--unshield", "1.0", &[]);
+    assert!(out.contains("verdict: AMBER") && !out.contains("(last synced block)"), "{out}");
+    let twelve: Vec<String> = (1..=12).map(|i| line("shield", 100_000_000, i, "")).collect();
+    let out = check(&f("cli-end4.ndjson", &twelve), "--unshield", "1.0", &[]);
+    assert!(out.contains("verdict: GREEN") && !out.contains("(last synced block)"), "{out}");
+    // the overall verdict counts: a GREEN amount with a RED address is RED, and says it
+    let a = "t1XQZdZMnzXBcL8yx2PR27dSNrqctgwLgux";
+    let mut v = twelve.clone();
+    v.push(line("shield", 500_000_000, 20, &format!(r#","src":["{a}"]"#)));
+    let d = f("cli-end5.ndjson", &v);
+    let (ok, out, _) =
+        run(&["check", "--unshield", "-", "--to", "-", "--pool", "sapling", "--data", d.to_str().unwrap()], Some(&format!("1\n{a}\n")));
+    assert!(ok && out.contains("verdict: RED (worst of amount GREEN and address RED)") && out.contains(line_after), "{out}");
+    // --json carries it among the notes, and only there
+    let j: serde_json::Value = serde_json::from_str(&check(&none, "--unshield", "1.0", &["--json"])).unwrap();
+    let notes: Vec<&str> = j["notes"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+    assert!(notes.contains(&line_after.trim()), "{j}");
+}
+
+#[test]
+fn json_carries_the_data_window_its_age_the_footer_and_the_notes() {
+    let t = wall() - 3 * 3600;
+    // one hour short of a 30-day lookback, and a sync that skipped something that matters
+    let m = meta_at(t, 30 * 86_400 - 3600).replace('}', r#","skipped":{"conservation_fails":2}}"#);
+    let j: serde_json::Value = serde_json::from_str(&check_with_meta("cli-js1.ndjson", &m, true)).unwrap();
+    assert_eq!(
+        j["data"],
+        serde_json::json!({"first_h": 3499000, "last_h": 3500100, "first_t": t - 30 * 86_400 + 3600, "last_t": t, "events": 1})
+    );
+    let age = j["stale_secs"].as_u64().unwrap();
+    assert!((3 * 3600..3 * 3600 + 120).contains(&age), "{j}");
+    assert_eq!(j["short_window"], true);
+    let footer = j["not_covered"].as_str().unwrap();
+    assert!(footer.starts_with("Covers amount + timing within one pool") && footer.contains("Not covered: wallet/fee fingerprints"), "{j}");
+    assert_eq!(j["pools"].as_array().unwrap().len(), 3);
+    let notes: Vec<&str> = j["notes"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+    for want in [
+        "warning: skipped conservation_fails 2:",
+        "warning: the newest block in this data is 3.0 h old",
+        "warning: the data covers 29.96 days but the lookback is 30 days",
+        "shields after ",
+    ] {
+        assert!(notes.iter().any(|n| n.starts_with(want) || n.contains(want)), "{want}: {notes:?}");
+    }
+    // a window as long as the lookback, a block a minute old: nothing to say about age or length
+    let j: serde_json::Value = serde_json::from_str(&check_with_meta("cli-js2.ndjson", &meta_at(wall() - 60, 30 * 86_400), true)).unwrap();
+    assert_eq!((&j["short_window"], j["stale_secs"].as_u64().map(|s| s < 3600)), (&serde_json::json!(false), Some(true)), "{j}");
+    assert!(!j["notes"].to_string().contains("warning"), "{j}");
+}
+
+// The 6 hours of slack are gone: a window even a second shorter than the lookback is said to be short.
+#[test]
+fn a_window_shorter_than_the_lookback_is_a_short_window_without_slack() {
+    let t = wall() - 60;
+    let day = 30 * 86_400;
+    let text = |span| check_with_meta("cli-short.ndjson", &meta_at(t, span), false);
+    assert!(!text(day).contains("the data covers"), "exactly the lookback is enough");
+    assert!(text(day - 1).contains("warning: the data covers 30.00 days but the lookback is 30 days"));
+    assert!(text(day - 3600).contains("warning: the data covers 29.96 days but the lookback is 30 days"));
+    // the committed 30-day sample (30.27 days) is long enough for a 30-day lookback, not for 31
+    let sample = format!("{}/../../fixtures/flows-sample.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let go = |days: &str| run(&["check", "--unshield", "-", "--lookback-days", days, "--data", &sample], Some("1.0\n")).1;
+    assert!(!go("30").contains("the data covers"), "{}", go("30"));
+    assert!(go("31").contains("warning: the data covers 30.27 days but the lookback is 31 days"), "{}", go("31"));
+}
+
+#[test]
+fn a_clock_far_off_the_chain_is_reported() {
+    let now = wall();
+    let m = |last_t| meta_at(last_t, 31 * 86_400);
+    let out = check_with_meta("cli-clock1.ndjson", &m(now + 4 * 3600), false);
+    assert!(
+        out.contains("warning: this computer's clock (") && out.contains(") is more than 3 h behind the newest block in this data ("),
+        "{out}"
+    );
+    let out = check_with_meta("cli-clock2.ndjson", &m(now - 400 * 86_400), false);
+    assert!(out.contains(") is more than a year after the newest block in this data ("), "{out}");
+    // within the limits: a clock 1 h behind, data a week old (stale, but the clock is fine)
+    for (name, last_t) in
+        [("cli-clock3.ndjson", now + 3600), ("cli-clock4.ndjson", now - 7 * 86_400), ("cli-clock5.ndjson", now - 300 * 86_400)]
+    {
+        let out = check_with_meta(name, &m(last_t), false);
+        assert!(!out.contains("this computer's clock"), "{out}");
+    }
+    let j: serde_json::Value = serde_json::from_str(&check_with_meta("cli-clock6.ndjson", &m(now + 4 * 3600), true)).unwrap();
+    assert!(j["notes"].to_string().contains("more than 3 h behind"), "{j}");
+    assert_eq!(j["stale_secs"], 0);
+}
+
+#[test]
+fn numeric_options_have_limits_and_huge_values_are_refused_not_crashed() {
+    let d = data_file("cli-limits.ndjson", &[line("shield", 100_015_000, 1, "")]);
+    let f = d.to_str().unwrap();
+    let max = u64::MAX.to_string();
+    for (flag, v, range) in [
+        ("--lookback-days", "0", "1..=3650"),
+        ("--lookback-days", "3651", "1..=3650"),
+        ("--lookback-days", max.as_str(), "1..=3650"),
+        ("--tolerance-zat", "100000001", "0..=100000000"),
+        ("--tolerance-zat", max.as_str(), "0..=100000000"),
+        ("--fee-allowance-zat", "100000001", "0..=100000000"),
+        ("--fee-allowance-zat", max.as_str(), "0..=100000000"),
+    ] {
+        let (ok, out, err) = run(&["check", "--unshield", "-", flag, v, "--data", f], Some("1.0\n"));
+        assert!(!ok && out.is_empty() && err.contains(&format!("not in {range}")) && !err.contains("panicked"), "{flag} {v}: {err}");
+    }
+    for days in ["0", "3651", max.as_str()] {
+        let (ok, _, err) = run(&["sync", "--days", days, "--out", "/nonexistent/flows.ndjson"], None);
+        assert!(!ok && err.contains("not in 1..=3650") && !err.contains("panicked"), "--days {days}: {err}");
+    }
+    // the limits themselves are accepted, and the widest window still gives a verdict
+    let args = [
+        "check",
+        "--unshield",
+        "-",
+        "--lookback-days",
+        "3650",
+        "--tolerance-zat",
+        "100000000",
+        "--fee-allowance-zat",
+        "100000000",
+        "--data",
+        f,
+    ];
+    let (ok, out, err) = run(&args, Some("1.0\n"));
+    assert!(ok, "{err}");
+    contract(&out);
+    // and the help says where the limits are
+    for (cmd, want) in [("check", ["1 to 3650", "0 to 100000000"]), ("sync", ["1 to 3650", "1 to 3650"])] {
+        let (_, help, _) = run(&[cmd, "--help"], None);
+        assert!(want.iter().all(|w| help.contains(w)), "{cmd}: {help}");
+    }
 }

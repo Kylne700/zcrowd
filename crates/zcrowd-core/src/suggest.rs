@@ -14,7 +14,7 @@ pub struct Suggestion {
 /// match), biggest first; ties: closer to `zat`, then smaller amount. Scored with exactly the same
 /// window and weights as `crowd::score`, so a suggestion never promises more than the check shows.
 pub fn popular(events: &[Event], user: Kind, pool: Pool, zat: u64, p: &Params, n: usize) -> Vec<Suggestion> {
-    let (lo, hi) = (zat - zat / 10, zat + zat / 10);
+    let (lo, hi) = (zat - zat / 10, zat.saturating_add(zat / 10));
     let base = count(events, user, pool, zat, p).1.max(1.0);
     // Candidates are amounts that entries into `pool` actually used inside the lookback window. Asking `in_scope` for
     // the entry's own amount keeps this list and the count below on one definition of "entry".

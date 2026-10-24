@@ -22,6 +22,12 @@ pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurr
     }
 }
 
+/// Extra blocks fetched beyond `days`, so that `check --lookback-days <days>` does not find the window a hair short:
+/// block times vary (a 30-day span of 34560 blocks is 30 days only on average), so 5% and at least 144 blocks (~3 h).
+fn margin(days: u64) -> u64 {
+    (days.saturating_mul(BLOCKS_PER_DAY) / 20).max(144)
+}
+
 /// One sync per output file at a time: a second one would read the same old data, and whichever finishes last would
 /// silently drop the other's blocks. The lock goes away when the process ends, even if it is killed.
 fn lock(out: &Path) -> Result<std::fs::File> {
@@ -69,8 +75,7 @@ async fn go<S: BlockSource>(
         Some(h) => h,
         None => safe,
     };
-    // 144 extra blocks (~3 h) so the window is not a hair short of `days`.
-    let start = end.saturating_sub(days * BLOCKS_PER_DAY + 144);
+    let start = end.saturating_sub(days.saturating_mul(BLOCKS_PER_DAY).saturating_add(margin(days)));
     let (cands, st) = candidates(s, start, end).await?;
     println!(
         "blocks={} txs={} shield_like={} (coinbase {}) unshield_like={} move_like={} range={}..{} secs={:.1}",
@@ -166,11 +171,17 @@ async fn go<S: BlockSource>(
 
 #[cfg(test)]
 mod tests {
-    use super::merge_skipped;
+    use super::{margin, merge_skipped};
     use std::collections::BTreeMap;
 
     fn m(v: &[(&str, usize)]) -> BTreeMap<String, usize> {
         v.iter().map(|(k, n)| (k.to_string(), *n)).collect()
+    }
+
+    #[test]
+    fn the_margin_is_five_percent_with_a_floor_and_never_overflows() {
+        assert_eq!((margin(1), margin(7), margin(30), margin(3650)), (144, 403, 1728, 210_240));
+        assert_eq!(margin(u64::MAX), u64::MAX / 20);
     }
 
     #[test]

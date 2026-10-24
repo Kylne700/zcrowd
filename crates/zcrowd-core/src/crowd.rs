@@ -9,6 +9,11 @@ pub const DAY: u64 = 86_400;
 /// A "send max" round trip pays the fee out of the shielded note, so the recipient gets pool_in - fee.
 /// ZIP-317 fees are 5000 zat x max(2, actions); legacy wallets used 1000 or 10000.
 pub const DEFAULT_FEE_ALLOWANCE: u64 = 50_000;
+/// Longest lookback (and longest sync) the command line accepts: ten years.
+pub const MAX_LOOKBACK_DAYS: u64 = 3650;
+/// Largest amount tolerance or fee allowance the command line accepts: 1 ZEC. Both widen the window of amounts that
+/// count as a match; more than that matches nearly everything and says nothing.
+pub const MAX_SLACK_ZAT: u64 = 100_000_000;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Params {
@@ -59,7 +64,7 @@ pub(crate) fn in_scope(e: &Event, user: Kind, pool: Pool, zat: u64, p: &Params) 
         && e.pool == pool
         && e.confidence == Confidence::High
         && e.t <= p.now
-        && e.t >= p.now.saturating_sub(p.lookback_days * DAY)
+        && e.t >= p.now.saturating_sub(p.lookback_days.saturating_mul(DAY))
         && (lo..=hi).contains(&e.zat)
 }
 
@@ -376,5 +381,22 @@ mod tests {
             by_pool(&evs, Kind::Shield, X),
             [(Pool::Sapling, 0, Verdict::Red), (Pool::Orchard, 12, Verdict::Green), (Pool::Ironwood, 0, Verdict::Red)]
         );
+    }
+
+    // The command line limits these (MAX_LOOKBACK_DAYS, MAX_SLACK_ZAT), but the library takes any u64: a debug build panics
+    // on overflow, and a window of "everything" must simply match everything.
+    #[test]
+    fn huge_parameters_neither_panic_nor_overflow() {
+        let evs = vec![ev(Kind::Shield, X, NOW - 10), ev(Kind::Shield, u64::MAX, NOW - 20)];
+        let big = Params { lookback_days: u64::MAX, tol_zat: u64::MAX, fee_allowance_zat: u64::MAX, now: NOW };
+        for user in [Kind::Unshield, Kind::Shield] {
+            assert_eq!(score(&evs, user, X, &big).k, 2);
+            assert_eq!(score(&evs, user, u64::MAX, &big).k, 2);
+            assert_eq!(score_pools(&evs, user, X, &big).map(|c| c.k), [2, 0, 0]);
+            let _ = crate::suggest::popular(&evs, user, Pool::Sapling, u64::MAX, &big, 5);
+        }
+        // the lookback reaches back to the start of time and no further
+        assert_eq!(count(&evs, Kind::Unshield, X, &Params { now: 5, ..big }).0, 0);
+        assert_eq!(count(&evs, Kind::Unshield, X, &Params { lookback_days: u64::MAX, now: NOW, ..big }).0, 2);
     }
 }

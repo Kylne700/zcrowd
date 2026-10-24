@@ -58,7 +58,7 @@ pub fn txid_to_wire(display: &str) -> Result<Vec<u8>> {
 pub const DEFAULT_SERVERS: [&str; 3] = ["https://zec.rocks:443", "https://na.zec.rocks:443", "https://eu.zec.rocks:443"];
 
 /// tonic sends plain text for an `http://` URL even with a TLS config, so refuse that unless the server is this machine.
-fn require_tls(url: &str) -> Result<()> {
+pub fn require_tls(url: &str) -> Result<()> {
     let uri: tonic::codegen::http::Uri = url.parse().with_context(|| format!("not a URL: {url}"))?;
     let host = uri.host().unwrap_or("").trim_matches(['[', ']']);
     let local = host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback());

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks the claims of docs/PRIVACY.md one by one. Prints "AUDIT OK" when every claim holds, stops at the first that does not.
-# Needs: cargo, git, python3. Uses when present: unshare, openssl, node. A check that cannot run is printed as SKIP and
+# Needs: cargo, git, python3. Uses when present: unshare, cc, openssl, node. A check that cannot run is printed as SKIP and
 # counted as NOT VERIFIED. PLAYWRIGHT_CORE=<a playwright-core directory> adds the headless browser test of web/index.html.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -156,7 +156,7 @@ PY
   SRV=$!
   for _ in $(seq 50); do [ -s "$T/srv.port" ] && break; sleep 0.1; done
   PORT=$(head -1 "$T/srv.port")
-  timeout 30 "$BIN" sync --server "https://127.0.0.1:$PORT" --days 1 --out "$T/tls/flows.ndjson" >"$T/o" 2>&1 && die "P6 a self-signed server was accepted"
+  timeout 30 "$BIN" sync --no-tor --server "https://127.0.0.1:$PORT" --days 1 --out "$T/tls/flows.ndjson" >"$T/o" 2>&1 && die "P6 a self-signed server was accepted"
   grep -q 'UnknownIssuer' "$T/o" || { cat "$T/o" >&2; die "P6 the self-signed server was not rejected for its certificate"; }
   [ ! -e "$T/tls/flows.ndjson" ] || die "P6 data was written from an untrusted server"
   kill "$SRV" 2>/dev/null || true
@@ -228,6 +228,21 @@ echo "$IDS" | grep -qx 'Kylne700' || die "P11 commit name is not the neutral nam
 [ -z "$(git remote)" ] || die "P11 the repository has a remote"
 git check-ignore -q data/x && git check-ignore -q target/x || die "P11 data/ and target/ are not ignored"
 ok "P11 no home path, mail address or personal string in tracked or untracked files; $(git rev-list --count HEAD) commits, one neutral identity; no remote; data/ and target/ ignored"
+
+# T1-T4: sync goes through Tor by default and never falls back to a direct connection
+if unshare -rn true 2>/dev/null && command -v cc >/dev/null; then
+  must_pass "T1/T2 Tor tests" cargo test -q -p zcrowd --test tor
+  ok "T1/T2 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes nothing; --no-tor is the control the shim sees (crates/zcrowd/tests/tor.rs)"
+else
+  skip "T1/T2 Tor failure test (needs unshare -rn and a C compiler for the leak-check shim)"
+fi
+if [ "${LIVE:-}" = 1 ]; then
+  tests/leakcheck/run.sh "$BIN" >"$T/o" 2>&1 || { cat "$T/o" >&2; die "T3/T4 live leak check"; }
+  grep -q '^LEAKCHECK OK' "$T/o" || { cat "$T/o" >&2; die "T3/T4 live leak check did not finish"; }
+  ok "T3/T4 $(grep '^Tor sync:' "$T/o" | sed 's/^Tor sync: //'); $(grep '^Tor directory:' "$T/o" | sed 's/^Tor directory: //')"
+else
+  skip "T3/T4 live Tor leak check and Tor directory contents (needs the network and a C compiler: LIVE=1 bash tests/audit.sh)"
+fi
 
 if [ "$SKIPS" -eq 0 ]; then
   echo "AUDIT OK"

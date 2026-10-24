@@ -95,3 +95,20 @@ fn end_height_pins_the_range_and_respects_the_reorg_margin() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("..3522630 "), "{o:?}");
     assert!(String::from_utf8_lossy(&o.stderr).contains("reorg margin"), "{o:?}");
 }
+
+// A plain-text URL is refused before Tor starts: no bootstrap, no Tor state, and no "use --no-tor" advice.
+#[test]
+fn plain_text_url_is_refused_before_tor_starts() {
+    let d = scratch("tor-plain");
+    let o = Command::new(BIN)
+        .args(["sync", "--server", "http://example.org", "--tor-dir"])
+        .arg(d.join("tor-state"))
+        .arg("--out")
+        .arg(d.join("out/flows.ndjson"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(err.contains("refusing a plain-text connection") && !err.contains("--no-tor"), "{err}");
+    assert!(!d.join("tor-state").exists() && !d.join("out").exists(), "nothing may be created");
+}

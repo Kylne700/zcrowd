@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use zcrowd_core::crowd::DEFAULT_FEE_ALLOWANCE;
-use zcrowd_core::source::{DEFAULT_SERVERS, Fixtures, Lwd};
+use zcrowd_core::source::{DEFAULT_SERVERS, Fixtures, Lwd, require_tls};
 
 #[derive(Parser)]
 #[command(name = "zcrowd", version, about)]
@@ -120,6 +120,7 @@ async fn open_source(servers: Vec<String>, no_tor: bool, tor_dir: Option<PathBuf
         return Ok(Src::Fix(Fixtures::open(std::path::Path::new(&dir))?));
     }
     let list = if servers.is_empty() { DEFAULT_SERVERS.map(String::from).to_vec() } else { servers };
+    list.iter().try_for_each(|u| require_tls(u))?; // a plain-text URL is refused before Tor or anything else starts
     if no_tor {
         eprintln!("warning: --no-tor: connecting directly. The server sees your IP address and that you run zcrowd.");
         return Ok(Src::Net(Lwd::connect(&list, None).await?));

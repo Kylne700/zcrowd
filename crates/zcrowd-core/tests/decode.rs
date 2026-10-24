@@ -133,3 +133,44 @@ fn decode_tex_maps_to_its_p2pkh() {
     let test = ZcashAddress::from_transparent_p2pkh(NetworkType::Test, [7u8; 20]).to_string();
     assert!(zcrowd_core::decode::canonical_taddr(&test).is_err());
 }
+
+fn skip(txid: &str, h: u64) -> zcrowd_core::decode::Skip {
+    match event_from_tx(&raw(txid), h, 1).unwrap() {
+        Decoded::Skip(s) => s,
+        Decoded::Event(e) => panic!("expected a skip, got {e:?}"),
+    }
+}
+
+// The first transaction of the false NO MATCH of research/43 S1-1: two transparent inputs, one transparent change
+// output, and all the shielded value arrives in Ironwood (no Sapling or Orchard part at all). The old decoder saw no
+// pool here. The amount comes from the balances; it was NOT compared with a public explorer.
+#[test]
+fn decode_shield_into_ironwood_only() {
+    let e = ev("43bdcfaf262ba320576337dc63683bf4817ca6b03b0ff3a45ac156cbbd62e9c9", 3528000);
+    assert_eq!((e.kind, e.zat, e.pool, e.confidence), (Kind::Shield, 27_967_119, Pool::Ironwood, Confidence::High));
+    assert_eq!((e.n_tin, e.n_tout, e.coinbase), (2, 1, false));
+}
+
+// Ironwood-only unshield: no transparent input, one transparent output, fee 15000 (the pool paid output + fee).
+#[test]
+fn decode_unshield_from_ironwood_only() {
+    let e = ev("f319fec5570c158b089d97b2a04efc3d4df7e4b7131c0a66acd1874a37295cd5", 3494299);
+    assert_eq!((e.kind, e.zat, e.pool, e.fee_zat), (Kind::Unshield, 4_914_001, Pool::Ironwood, Some(15000)));
+    assert_eq!((e.n_tin, e.n_tout), (0, 1));
+}
+
+// Coinbase paid to a shielded address (spec 41 A11 / E15): a High shield into Ironwood, flagged as coinbase.
+#[test]
+fn decode_coinbase_shield_into_ironwood() {
+    let e = ev("6262a45c8455ce5a5b148b1a48ca13c3e32dfc052c50ccda7fcbc8d5f26e2445", 3499538);
+    assert_eq!((e.kind, e.zat, e.pool, e.confidence, e.coinbase), (Kind::Shield, 125_469_612, Pool::Ironwood, Confidence::High, true));
+}
+
+// Real transactions that are not events: a transparent input that only pays the fee next to an empty Ironwood bundle
+// (nothing crossed), and a Sapling transfer with no transparent part (the fee leaves the pool, nobody gets paid).
+#[test]
+fn skip_transactions_that_cross_nothing() {
+    use zcrowd_core::decode::Skip;
+    assert_eq!(skip("b2374054f1fb8323202b6f0c42dbbb1f1c484fe1f51b7b7bddf1f35e2c362086", 3495000), Skip::NoNetCrossing);
+    assert_eq!(skip("eababfcbf9ea4e57c2800e89bc61e0458dc17d3513562fd9f814fb800e7e7c4a", 3495000), Skip::NoTransparentPart);
+}

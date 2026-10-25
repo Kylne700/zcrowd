@@ -150,7 +150,7 @@ pub fn run(a: Args) -> Result<()> {
     let rests_on_missing = |v: Verdict, pool: Pool| pool != Pool::Orchard && matches!(v, Verdict::NoMatch | Verdict::Red);
     // The address finding rests on finding nothing too: an address that is clear, or only the destination of earlier unshields
     // (AMBER), turns RED if a shield from it comes after the last block. That holds in every pool, Orchard included, because the
-    // check looks at shields into any pool, not at the crowd (NOTES S9g, research/52 N1). A shield source is RED for good.
+    // check looks at shields into any pool, not at the crowd (NOTES S9g N1). A shield source is RED for good.
     // The page has no `--to`, so its `restsOnMissing` needs no address term.
     let addr_open = addr.as_ref().is_some_and(|f| !matches!(f, AddrFinding::ShieldSource { .. }));
     let shown = if a.pool == PoolArg::Any { &crowds[..] } else { std::slice::from_ref(c) };

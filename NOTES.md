@@ -651,8 +651,9 @@ The code is that of 046cc27 (F8 h is 578edd2). The one commit after it, 07043d0,
 the commits after that change NOTES.md only. Debug profile, load average 1 to 2, `PLAYWRIGHT_CORE=<playwright-core dir>`, one
 command after the other, 2026-10-25. Every command ended with exit 0:
 
-- `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`. The second clippy run (after 07043d0) came after
-  `cargo clean -p zcrowd -p zcrowd-core`, so nothing was cached: both crates checked, no warning.
+- `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`. The first clippy result was cached from an earlier
+  run on the same sources, so after 07043d0 clippy ran twice more: once with all sources touched, once after
+  `cargo clean -p zcrowd -p zcrowd-core`, so that nothing was cached: both crates checked, no warning.
 - `cargo test`, twice in a row: 139 tests passed, 0 failed, every time (15 s and 16 s; 17 s and 16 s after 07043d0; 112 tests in
   the S9d run).
 - `cargo +1.90.0 check --workspace --all-targets --locked` (the `rust-version`, offline): 23 s.

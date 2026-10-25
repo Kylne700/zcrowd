@@ -243,12 +243,12 @@ if (typeof document !== "undefined") {
     put($("why"), WHY[mode][r.verdict] || "");
     const into = " into " + r.pool + (pool === "any" ? " (the worst of the " + (r.pools.length === 2 ? "two" : "three") + " pools)" : "") + " of about " + fmtZec(zat) + " ZEC";
     put($("crowd"), (mode === "unshield"
-      ? r.k + " earlier shields and moves" + into + " (allowing for the fee)"
-      : r.k + " other shields and moves" + into + " (the decoys for a later unshield of the whole note)")
+      ? r.k + (r.k === 1 ? " earlier shield or move" : " earlier shields and moves") + into + " (allowing for the fee)"
+      : r.k + (r.k === 1 ? " other shield or move" : " other shields and moves") + into + " (the decoys for a later unshield of the whole note)")
       + "; weighted " + r.weighted.toFixed(1) + " (entries older than 14 days count half).");
     $("pools").replaceChildren();
     if (pool === "any") for (const o of r.pools) li($("pools"), "pool " + o.pool + ": k=" + o.k + " weighted=" + o.weighted.toFixed(1) + " -> " + o.verdict);
-    put($("pool-note"), r.other_pools_k + " entries of about this amount went into the other pools: linkable only through a visible pool move; not counted." + (pool === "any" ? " Funds in another pool? Choose the pool above for a precise answer." : ""));
+    put($("pool-note"), r.other_pools_k + (r.other_pools_k === 1 ? " entry" : " entries") + " of about this amount went into the other pools: linkable only through a visible pool move; not counted." + (pool === "any" ? " Funds in another pool? Choose the pool above for a precise answer." : ""));
     const notes = [];
     if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
     if (restsOnMissing(r, pool)) notes.push("Note: shields after " + fmtUtc(c.last_t) + " (last synced block) are not counted.");

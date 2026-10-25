@@ -225,6 +225,7 @@ async function privacy(browser, origin, url) {
   assert.equal(poolPick.sapling.verdict, "GREEN");
   assert.match(poolPick.sapling.crowd, /^157 earlier shields and moves into sapling of about /);
   await page.locator("#pool").selectOption("any");
+  await amount.fill("3.73"); assert.match(await page.locator("#crowd").innerText(), /^1 earlier shield or move into sapling \(the worst of the three pools\) of about 3\.73000000 ZEC \(allowing for the fee\); weighted 1\.0 /, "a crowd of one reads in the singular (3.73 ZEC: one entry, in Sapling)");
   // NO MATCH and RED say which shields are missing (the CLI prints the same words); GREEN and AMBER do not
   const examples = {};
   for (const want of ["GREEN", "AMBER", "RED", "NO MATCH"]) {

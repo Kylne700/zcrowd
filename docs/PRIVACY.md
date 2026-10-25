@@ -13,7 +13,7 @@ bash tests/e2e.sh            # formatting, lints, all 140 tests, the command lin
 
 A step that cannot run on a machine prints `SKIP ... (NOT VERIFIED)`; the audit counts the skips and its last line says
 so. Every result on this page is of the final code (commit `dd7f9ee`; the commits after it change documents, the
-screenshot, 3 lines of `.github/workflows/ci.yml` and the web page (its first box, README section 13); a result from a named CI run is of `70d5187`), run
+screenshot, 3 lines of `.github/workflows/ci.yml`, 2 lines of `tests/e2e.sh`, 1 line of `web/test/headless.mjs` and the web page (its first box, then a grammar fix of it, README section 13); a result from a named CI run is of `70d5187`), run
 on 2026-10-25 on a Linux desktop (x86_64) with Rust 1.97.1. The limits of the whole tool are the one list in
 [README section 11](../README.md#11-honest-limits), and what was never run or seen is the one list
 [NOT VERIFIED](../README.md#not-verified) at the end of the README.

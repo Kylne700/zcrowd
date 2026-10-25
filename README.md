@@ -21,7 +21,7 @@ web page. It computes only what any chain observer can already compute, for your
 | Rust | 1.90 or newer (`rust-version` in `Cargo.toml`; `cargo +1.90.0 check --workspace --all-targets --locked` passes). The tests and the audit ran on 1.97.1, the version CI pins (the repository has no `rust-toolchain` file, so your own toolchain is used); the tests under 1.90 are NOT VERIFIED. A C compiler is needed (SQLite is bundled). |
 | First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, on a Linux desktop, crates already downloaded; a second run the same day, with other jobs using the machine (load average 4 before it started), took 101 s; a first build elsewhere also downloads the crates). |
 | Platform | Linux is the tested platform (140 tests, the audit and `tests/e2e.sh`, by hand and in CI). macOS (aarch64) and Windows (x86_64-msvc) were built and tested in CI only: 135 and 132 tests passed in [run 40171306113](https://github.com/Kylne700/zcrowd/actions/runs/40171306113) (jobs 121102516531 and 121102516515, commit `70d5187`). Neither was run by hand on a real Mac or Windows PC, and no `sync` ran on either (NOT VERIFIED, end of this file). Windows has no network cut. |
-| Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents (and the screenshot), 3 lines of `.github/workflows/ci.yml` (a macOS fix, section 14) and the web page: the commit that adds the page's first box (`c34e02c`; the report's figures, section 13) changes `web/index.template.html`, the built `web/index.html` (its size and SHA-256, section 3.1) and 2 lines of `tests/e2e.sh`; with that box in place the tests, `tests/e2e.sh` with the audit, the parity test and the headless test (section 13) were run again and passed. The CI runs named in this README are of `70d5187`, before that box, except runs 40231250867 and 40231250834, which are of `93a9206`, with it. |
+| Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents (and the screenshot), 3 lines of `.github/workflows/ci.yml` (a macOS fix, section 14), the web page and a grammar fix of the page: the commit that adds the page's first box (`c34e02c`; the report's figures, section 13) changes `web/index.template.html`, the built `web/index.html` (its size and SHA-256, section 3.1) and 2 lines of `tests/e2e.sh`; with that box in place the tests, `tests/e2e.sh` with the audit, the parity test and the headless test (section 13) were run again and passed. The grammar fix makes the page say "1 earlier shield or move", "1 other shield or move" and "1 entry" (it said "shields and moves" and "entries" for a crowd of one); it changes 3 lines of `web/index.template.html`, the same 3 lines of the built `web/index.html` (its size and SHA-256, section 3.1) and 1 line of `web/test/headless.mjs` (the single match of 3.73 ZEC); with it in place the tests, `tests/e2e.sh` with the audit, the parity test and the headless test (section 13) were run again and passed. The CI runs named in this README are of `70d5187`, before that box, except runs 40231250867 and 40231250834, which are of `93a9206`, with that box and before the grammar fix. |
 | Data | `fixtures/flows-sample.ndjson`: 74,643 real mainnet events, blocks 3,493,237 to 3,529,525 (2026-09-23 08:32 UTC to 2026-10-25 00:05 UTC, 31.65 days). The quick start and every example below run on it without a network. |
 
 **What to run, per judging criterion.** The middle column is a command to run or a file to open; the right column is what it does not cover. No score is claimed. The `zcrowd` commands assume the build and the `PATH` of section 2. The full lists are section 11 and [NOT VERIFIED](#not-verified).
@@ -179,7 +179,7 @@ sha256sum web/index.html
 ```
 
 ```
-5c207b85884bf8d460a78c7044069294682542ea07391e19244b8a5297f57126  web/index.html
+57fcebc29fc9b5cb7fa02efd55e8e27baa9e7c2d859dd689041db4126e48c94f  web/index.html
 ```
 
 (macOS: `shasum -a 256 web/index.html`.) Open the file in a browser (a private window with extensions off is the
@@ -1010,7 +1010,7 @@ LIVE=1 bash tests/audit.sh      # also the live Tor leak check (real network, a 
 
 ## 13. Web page
 
-`web/index.html` is one self-contained file: data, code and style inline, no libraries, no WASM (836,193 bytes, holding 34,293
+`web/index.html` is one self-contained file: data, code and style inline, no libraries, no WASM (836,317 bytes, holding 34,293
 shield and move entries of the sample). It is built by `node web/build.mjs` from `web/index.template.html` and the sample,
 and audit P10 checks that the committed file is exactly what that builds. Open it from disk or host it as a static file.
 It says on the page: "This page cannot send anything: its Content-Security-Policy blocks all network requests. Check
@@ -1032,20 +1032,23 @@ first words of the box change or if the report's RED row is not 1,412 (8.0%). 17
 
 The Content-Security-Policy is a `<meta>` tag inside the file (section 3.1). It protects the copy you opened; a host that
 serves you a modified copy is the reason to compare the SHA-256 of section 3.1. When GitHub Pages serves it, the HTTP headers
-are GitHub's, not ours. Verified in headless Chromium 154, Firefox 157 and WebKit 27.2, from `http://` and `file://`
-(`BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`, on the page with its first box, 2026-10-25, 15 s, last line):
+are GitHub's, not ours. Verified in headless Chromium 156, Firefox 157 and WebKit 27.2, from `http://` and `file://`
+(`BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`, on the page with its first box and the grammar fix,
+2026-10-25, 19 s, last line):
 
 ```
-HEADLESS OK (chromium 154.0.8037.92, firefox 157.0, webkit 27.2; the server saw 3 page loads and nothing else)
+HEADLESS OK (chromium 156.0.8078.4, firefox 157.0, webkit 27.2; the server saw 3 page loads and nothing else)
 ```
 
 Real Safari is NOT VERIFIED. A hosted copy is live at https://kylne700.github.io/zcrowd/ and `.github/workflows/pages.yml`
 ran on `70d5187` (run 40171306059, jobs 121102516123 and 121102545676); it publishes `web/index.html` and nothing else,
 every job has `contents: read`, and only the deploy job also has `pages: write` and `id-token: write`. It ran again on
 `93a9206`, the page with its first box (run 40231250834, jobs 121283253676 and 121283298381). On 2026-10-25 the address
-then answered with 836,193 bytes (HTTP 200, `text/html`) whose SHA-256 is the value in section 3.1, so the hosted copy is
-byte-identical to `web/index.html`. The headless test also passed in CI on that page, one job per browser (run
-40231250867, section 14).
+then answered with 836,193 bytes (HTTP 200, `text/html`) whose SHA-256 was
+`5c207b85884bf8d460a78c7044069294682542ea07391e19244b8a5297f57126`, the value of section 3.1 at commit `93a9206`
+(the page before its grammar fix), so the hosted copy was then byte-identical to `web/index.html` of that commit. The
+hosted copy of the page with the grammar fix (836,317 bytes) has not been read back (NOT VERIFIED, end of this file). The
+headless test also passed in CI on the page before the fix, one job per browser (run 40231250867, section 14).
 
 ## 14. Dependencies, licence, roadmap
 
@@ -1097,6 +1100,8 @@ Platforms and publishing
   handler (`tests/stop.rs` is Unix-only; the Windows fallback compiled in job 121102516515 and was never run). A Linux
   aarch64 build.
 - GitHub: `release.yml` (including its draft step) has not run.
+- The hosted copy of the page with the grammar fix (836,317 bytes, SHA-256 in section 3.1) and a CI run on it: neither has
+  been seen. The read-back of section 13 and the CI runs of section 14 are of the page before the fix.
 - The tests under Rust 1.90 (only `cargo check --workspace --all-targets --locked` was run on it; the tests ran on 1.97.1).
 - A real default Ubuntu 24.04 host on which the empty network namespace is refused: by hand that case was only simulated
   with `max_user_namespaces=0`; the CI runner of job 121102516415 (`apparmor_restrict_unprivileged_userns=1`) still gave

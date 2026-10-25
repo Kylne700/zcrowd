@@ -107,7 +107,8 @@ jobs:
       - name: The macOS sandbox as a user sees it
         if: runner.os == 'macOS'
         run: |
-          out=$(script -q /dev/null target/debug/zcrowd sandbox-probe 127.0.0.1:9 --sandbox | tr -d '\r')
+          # script(1) on macOS echoes "^D" and two backspaces into the output when its empty stdin ends.
+          out=$(script -q /dev/null target/debug/zcrowd sandbox-probe 127.0.0.1:9 --sandbox | tr -d '\r\b' | sed 's/\^D//g')
           printf '%s\n' "$out"
           grep -qxF 'note: network cut for this command: macOS sandbox (no-network)' <<<"$out"
           grep -q '^blocked: ' <<<"$out"

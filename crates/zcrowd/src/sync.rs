@@ -2,8 +2,9 @@ use crate::Src;
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use zcrowd_core::Kind;
 use zcrowd_core::ingest::{RawCache, all_pools_from, candidates, resolve};
 use zcrowd_core::model::{FORMAT_VERSION, Meta, read_meta, read_ndjson, save};
@@ -14,13 +15,60 @@ const BLOCKS_PER_DAY: u64 = 1152; // 75 s blocks
 const REORG_MARGIN: u64 = 10;
 
 pub async fn run(src: Src, days: u64, out: &Path, candidates_only: bool, concurrency: usize, end_height: Option<u64>) -> Result<()> {
-    match src {
-        Src::Net(s) => {
-            eprintln!("server: {} ({})", s.url, if s.tor { "via Tor" } else { "direct" });
-            go(&s, days, out, candidates_only, concurrency, end_height).await
+    // Listening before any work starts. A stop is taken at the next await point and never inside a write: the cache entries
+    // and the saved file are written by code that does not await, so what is on disk is whole, and the next sync goes on
+    // from the transactions already cached. (While Tor starts, before this, a signal ends the process at once: nothing is
+    // written yet.)
+    let stop = stop_signal()?;
+    let work = async {
+        match src {
+            Src::Net(s) => {
+                eprintln!("server: {} ({})", s.url, if s.tor { "via Tor" } else { "direct" });
+                go(&s, days, out, candidates_only, concurrency, end_height, Voice::new()).await
+            }
+            Src::Fix(s) => go(&s, days, out, candidates_only, concurrency, end_height, Voice::new()).await,
         }
-        Src::Fix(s) => go(&s, days, out, candidates_only, concurrency, end_height).await,
+    };
+    tokio::select! {
+        r = work => r,
+        (name, code) = stop => {
+            // `work` is gone by now: its lock is released
+            eprintln!(
+                "sync: stopped by {name}. {} is as it was, and the transactions already fetched are kept in {}: run the same command again to go on.",
+                out.display(),
+                cache_dir(out).display()
+            );
+            std::process::exit(code)
+        }
     }
+}
+
+/// Resolves, with the signal's name and the exit code a shell shows for it, when the process is asked to stop.
+#[cfg(unix)]
+fn stop_signal() -> Result<impl std::future::Future<Output = (&'static str, i32)>> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut int = signal(SignalKind::interrupt())?;
+    let mut term = signal(SignalKind::terminate())?;
+    Ok(async move {
+        tokio::select! {
+            _ = int.recv() => ("SIGINT", 130),
+            _ = term.recv() => ("SIGTERM", 143),
+        }
+    })
+}
+
+/// shortcut: Ctrl-C only; a terminate request on Windows ends the process at once. Upgrade when Windows is supported.
+#[cfg(not(unix))]
+fn stop_signal() -> Result<impl std::future::Future<Output = (&'static str, i32)>> {
+    Ok(async {
+        let _ = tokio::signal::ctrl_c().await;
+        ("Ctrl-C", 130)
+    })
+}
+
+/// Where the raw transactions of a sync into `out` are kept.
+fn cache_dir(out: &Path) -> std::path::PathBuf {
+    out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).join("tx")
 }
 
 /// Extra blocks fetched beyond `days`, so that `check --lookback-days <days>` does not find the window a hair short:
@@ -58,7 +106,7 @@ fn merge_skipped(old: Option<BTreeMap<String, usize>>, new: BTreeMap<String, usi
 }
 
 /// Counts finished work and says when a progress line is due: at every 5 percent and at the end, so any range
-/// prints about 20 lines.
+/// prints about 20 of these lines. A slow stretch between two of them gets the lines of `Voice`.
 struct Meter {
     total: AtomicU64,
     done: AtomicU64,
@@ -83,11 +131,67 @@ impl Meter {
     }
 }
 
+/// How a sync speaks: `say` prints a line and notes the time. A slow phase would be silent between two 5% lines (the
+/// first 5% of a month over Tor is minutes), so while it runs `while_running` adds a status line whenever `quiet` has
+/// passed without any line (checked every `check`): the longest silence is about `quiet + check`.
+struct Voice {
+    out: fn(&str),
+    last: Mutex<Instant>,
+    quiet: Duration,
+    check: Duration,
+}
+
+impl Voice {
+    fn new() -> Self {
+        Voice {
+            out: |l| eprintln!("{l}"),
+            last: Mutex::new(Instant::now()),
+            quiet: Duration::from_secs(40),
+            check: Duration::from_secs(10),
+        }
+    }
+
+    fn say(&self, line: &str) {
+        (self.out)(line);
+        *self.last.lock().unwrap() = Instant::now();
+    }
+
+    async fn while_running<T>(&self, status: impl Fn() -> String, work: impl Future<Output = T>) -> T {
+        let beat = async {
+            let mut tick = tokio::time::interval(self.check);
+            loop {
+                tick.tick().await;
+                if self.last.lock().unwrap().elapsed() >= self.quiet {
+                    self.say(&status());
+                }
+            }
+        };
+        tokio::select! {
+            r = work => r,
+            () = beat => unreachable!(),
+        }
+    }
+}
+
+/// "45 s", "3 min 5 s".
+fn took(since: Instant) -> String {
+    let s = since.elapsed().as_secs();
+    if s < 60 { format!("{s} s") } else { format!("{} min {} s", s / 60, s % 60) }
+}
+
 /// The source of a sync, with progress on stderr: heights and counts only, nothing about the user.
 struct Progress<'a, S> {
     inner: &'a S,
     blocks: Meter,
     txs: Meter,
+    voice: Voice,
+}
+
+impl<S: BlockSource> Progress<'_, S> {
+    /// Blocks received so far, also those of a `blocks` call that is still running when the source counts them.
+    fn blocks_so_far(&self) -> u64 {
+        self.inner.blocks_seen().max(self.blocks.done.load(Relaxed))
+    }
 }
 
 impl<S: BlockSource> BlockSource for Progress<'_, S> {
@@ -97,16 +201,19 @@ impl<S: BlockSource> BlockSource for Progress<'_, S> {
     async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
         let r = self.inner.blocks(start, end).await?;
         if let Some((done, total, pct)) = self.blocks.add(end.saturating_sub(start).saturating_add(1)) {
-            eprintln!("sync: blocks {done} of {total} ({pct}%)");
+            self.voice.say(&format!("sync: blocks {done} of {total} ({pct}%)"));
         }
         Ok(r)
     }
     async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
         let r = self.inner.raw_tx(txid).await?;
         if let Some((done, total, _)) = self.txs.add(1) {
-            eprintln!("sync: fetched {done} of up to {total} transactions");
+            self.voice.say(&format!("sync: fetched {done} of up to {total} transactions"));
         }
         Ok(r)
+    }
+    async fn tree_sizes(&self, h: u64) -> Result<Option<[u64; 3]>> {
+        self.inner.tree_sizes(h).await
     }
     fn strict_chain(&self) -> bool {
         self.inner.strict_chain()
@@ -120,6 +227,7 @@ async fn go<S: BlockSource>(
     candidates_only: bool,
     concurrency: usize,
     end_height: Option<u64>,
+    voice: Voice,
 ) -> Result<()> {
     let t0 = Instant::now();
     let _lock = if candidates_only { None } else { Some(lock(out)?) };
@@ -133,9 +241,11 @@ async fn go<S: BlockSource>(
         None => safe,
     };
     let start = end.saturating_sub(days.saturating_mul(BLOCKS_PER_DAY).saturating_add(margin(days)));
-    let p = Progress { inner: s, blocks: Meter::new(end.saturating_sub(start).saturating_add(1)), txs: Meter::new(0) };
-    eprintln!("sync: fetching blocks {start}..{end}");
-    let (cands, st) = candidates(&p, start, end).await?;
+    let p = Progress { inner: s, blocks: Meter::new(end.saturating_sub(start).saturating_add(1)), txs: Meter::new(0), voice };
+    p.voice.say(&format!("sync: fetching blocks {start}..{end}"));
+    let crawling =
+        || format!("sync: still fetching blocks: {} of {} so far ({} in)", p.blocks_so_far(), p.blocks.total.load(Relaxed), took(t0));
+    let (cands, st) = p.voice.while_running(crawling, candidates(&p, start, end)).await?;
     println!(
         "blocks={} txs={} shield_like={} (coinbase {}) unshield_like={} move_like={} range={}..{} secs={:.1}",
         st.blocks,
@@ -158,15 +268,36 @@ async fn go<S: BlockSource>(
             st.pool_blocks[2]
         );
     }
+    match st.tree_growth {
+        Some(g) => println!(
+            "tree check: the server's tree states (blocks {} and {end}) grew by Sapling {}, Orchard {}, Ironwood {} note commitments, exactly what its blocks hold",
+            start.saturating_sub(1),
+            g[0],
+            g[1],
+            g[2]
+        ),
+        None if s.strict_chain() => println!(
+            "tree check: none, the server serves no tree states (a pool with no data in more than {} blocks from NU6.3 on is refused instead)",
+            zcrowd_core::ingest::MIN_BLOCKS_BEFORE_POOL_MISSING
+        ),
+        None => {}
+    }
     if candidates_only {
         return Ok(());
     }
     let Some(new_cov) = st.coverage else { anyhow::bail!("server returned no blocks") };
-    let dir = out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let cache = RawCache(dir.join("tx"));
+    let cache = RawCache(cache_dir(out));
     p.txs.total.store(cands.len() as u64, Relaxed);
-    eprintln!("sync: fetching up to {} transactions (the ones already saved are not fetched again)", cands.len());
-    let r = resolve(&p, &cands, &cache, concurrency).await?;
+    p.voice.say(&format!("sync: fetching up to {} transactions (the ones already saved are not fetched again)", cands.len()));
+    let fetching = || {
+        format!(
+            "sync: still fetching transactions: {} of up to {} so far ({} in)",
+            p.txs.done.load(Relaxed),
+            p.txs.total.load(Relaxed),
+            took(t0)
+        )
+    };
+    let r = p.voice.while_running(fetching, resolve(&p, &cands, &cache, concurrency)).await?;
 
     // Merge into any existing file: events inside the new range are replaced, older ones kept
     // when the ranges touch; a gap would make the coverage claim false, so then the old data is dropped.
@@ -232,8 +363,90 @@ async fn go<S: BlockSource>(
 
 #[cfg(test)]
 mod tests {
-    use super::{Meter, margin, merge_skipped};
+    use super::{Meter, Voice, go, margin, merge_skipped};
+    use anyhow::Result;
     use std::collections::BTreeMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    use std::time::{Duration, Instant};
+    use zcrowd_core::source::{BlockSource, BlockSummary, Fixtures};
+
+    fn voice(out: fn(&str), quiet_ms: u64, check_ms: u64) -> Voice {
+        Voice { out, last: Mutex::new(Instant::now()), quiet: Duration::from_millis(quiet_ms), check: Duration::from_millis(check_ms) }
+    }
+
+    static CHATTY: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    #[tokio::test]
+    async fn a_phase_that_keeps_talking_gets_no_status_line_and_a_silent_one_does() {
+        let v = voice(|l| CHATTY.lock().unwrap().push(l.to_string()), 250, 50);
+        // a line every 25 ms for 300 ms: never 250 ms without one
+        let talking = async {
+            for i in 0..12 {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                v.say(&format!("line {i}"));
+            }
+        };
+        v.while_running(|| "status".into(), talking).await;
+        assert!(!CHATTY.lock().unwrap().iter().any(|l| l == "status"), "{:?}", CHATTY.lock().unwrap());
+        v.while_running(|| "status".into(), tokio::time::sleep(Duration::from_millis(900))).await;
+        let n = CHATTY.lock().unwrap().iter().filter(|l| *l == "status").count();
+        assert!((2..=4).contains(&n), "{n} status lines in 900 ms of silence, one per 250 ms");
+    }
+
+    /// The fixtures as a slow server: every call takes a while, and a block call has received 7 blocks when it starts.
+    struct Slow {
+        inner: Fixtures,
+        seen: AtomicU64,
+    }
+
+    impl BlockSource for Slow {
+        async fn tip(&self) -> Result<u64> {
+            self.inner.tip().await
+        }
+        async fn blocks(&self, start: u64, end: u64) -> Result<Vec<BlockSummary>> {
+            self.seen.fetch_add(7, Relaxed);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            self.inner.blocks(start, end).await
+        }
+        async fn raw_tx(&self, txid: &str) -> Result<(Vec<u8>, u64)> {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            self.inner.raw_tx(txid).await
+        }
+        fn blocks_seen(&self) -> u64 {
+            self.seen.load(Relaxed)
+        }
+    }
+
+    static WIRED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    // Fails without the heartbeat: the crawl of 2 chunks and the 3 transactions, each call a half second of silence.
+    #[tokio::test]
+    async fn the_crawl_and_the_transaction_fetch_both_say_where_they_are_while_they_are_slow() {
+        let slow = Slow {
+            inner: Fixtures::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures"))).unwrap(),
+            seen: 0.into(),
+        };
+        let dir = std::env::temp_dir().join(format!("zcrowd-unit-voice-{}", std::process::id()));
+        let v = voice(|l| WIRED.lock().unwrap().push(l.to_string()), 100, 25);
+        go(&slow, 2, &dir.join("flows.ndjson"), false, 1, None, v).await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let lines = WIRED.lock().unwrap().clone();
+        let has = |p: &str| lines.iter().any(|l| l.starts_with(p));
+        // the count of blocks comes from the source, in the middle of a call that has not returned yet
+        assert!(has("sync: still fetching blocks: 7 of 2449 so far ("), "{lines:#?}");
+        assert!(has("sync: still fetching transactions: 0 of up to 3 so far ("), "{lines:#?}");
+        // and the lines that were there stay
+        for want in [
+            "sync: fetching blocks 3520182..3522630",
+            "sync: blocks 2000 of 2449 (81%)",
+            "sync: blocks 2449 of 2449 (100%)",
+            "sync: fetching up to 3 transactions (the ones already saved are not fetched again)",
+            "sync: fetched 3 of up to 3 transactions",
+        ] {
+            assert!(lines.iter().any(|l| l == want), "missing {want:?}: {lines:#?}");
+        }
+    }
 
     fn m(v: &[(&str, usize)]) -> BTreeMap<String, usize> {
         v.iter().map(|(k, n)| (k.to_string(), *n)).collect()

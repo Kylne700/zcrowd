@@ -183,7 +183,7 @@ async function privacy(browser, origin, url) {
     verdicts[typed] = { verdict: (await page.locator("#verdict").innerText()).trim(), note: (await page.locator("#note").innerText()).trim() };
   }
   // "Not sure" (the default) scores all three pools and shows the worst: 1.0 ZEC has no crowd in Sapling or Orchard
-  // but 162 entries into Ironwood. A pool without an entry is NO MATCH, which GREEN outranks, so the missing-shields line has
+  // but 160 entries into Ironwood. A pool without an entry is NO MATCH, which GREEN outranks, so the missing-shields line has
   // to follow every pool shown (NOTES S9d F1): Sapling is NO MATCH for 1.0 and for 1.23456789 (Orchard never counts)
   const missing = `shields after ${LAST_UTC} (last synced block) are not counted`;
   // The sample holds no Orchard entry at all (nothing can enter it since NU6.3, ZIP 258): when Orchard is judged, a NO MATCH for it says
@@ -206,8 +206,8 @@ async function privacy(browser, origin, url) {
   await amount.press("Enter");
   assert.equal((await page.locator("#verdict").innerText()).trim(), "GREEN");
   assert.match(await page.locator("#crowd").innerText(), /^157 earlier shields and moves into sapling \(the worst of the three pools\) of about 1\.24970000 ZEC .* weighted 114\.5/);
-  assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=157 weighted=114.5 -> GREEN", "pool orchard: k=0 weighted=0.0 -> NO MATCH", "pool ironwood: k=592 weighted=437.0 -> GREEN"]);
-  assert.match(await page.locator("#pool-note").innerText(), /^592 entries of about this amount went into the other pools: linkable only through a visible pool move; not counted\./);
+  assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=157 weighted=114.5 -> GREEN", "pool orchard: k=0 weighted=0.0 -> NO MATCH", "pool ironwood: k=591 weighted=438.0 -> GREEN"]);
+  assert.match(await page.locator("#pool-note").innerText(), /^591 entries of about this amount went into the other pools: linkable only through a visible pool move; not counted\./);
   // only Orchard has no entry here, and no later block can add one (ZIP 258): no missing-shields line, but the Orchard note
   assert.doesNotMatch(await page.locator("#note").innerText(), /shields after/);
   assert.equal((await page.locator("#note").innerText()).trim(), orchardEmpty);
@@ -218,7 +218,7 @@ async function privacy(browser, origin, url) {
     assert.equal(poolPick[pool].lines, 0, "one pool chosen: no per-pool list");
   }
   assert.equal(poolPick.ironwood.verdict, "GREEN");
-  assert.match(poolPick.ironwood.crowd, /^592 earlier shields and moves into ironwood of about 1\.24970000 ZEC .* weighted 437\.0/);
+  assert.match(poolPick.ironwood.crowd, /^591 earlier shields and moves into ironwood of about 1\.24970000 ZEC .* weighted 438\.0/);
   assert.equal(poolPick.orchard.verdict, "NO MATCH");
   assert.ok(poolPick.orchard.note.includes(orchardEmpty), "pool Orchard: no note about the empty Orchard crowd");
   assert.ok(!poolPick.sapling.note.includes("Orchard has no entries") && !poolPick.ironwood.note.includes("Orchard has no entries"), "the Orchard note belongs to Orchard alone");
@@ -243,12 +243,12 @@ async function privacy(browser, origin, url) {
   assert.match(await page.locator("#msg").innerText(), /Type an amount/);
   await scan("empty");
   // shield mode: the decoys are the other entries into the pool the funds arrive in. A shield cannot go into Orchard (ZIP 258),
-  // so "Not sure" is the worse of Sapling and Ironwood: 1.24985 ZEC has a crowd of 88 in Sapling but 8 in Ironwood
+  // so "Not sure" is the worse of Sapling and Ironwood: 1.24985 ZEC has a crowd of 87 in Sapling but 9 in Ironwood
   await page.locator("#mode").selectOption("shield");
   await amount.fill("1.24985");
   assert.equal((await page.locator("#verdict").innerText()).trim(), "AMBER");
-  assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=88 weighted=64.5 -> GREEN", "pool ironwood: k=8 weighted=6.0 -> AMBER"]);
-  assert.match(await page.locator("#crowd").innerText(), /^8 other shields and moves into ironwood \(the worst of the two pools\) of about 1\.24985000 ZEC /);
+  assert.deepEqual(await page.locator("#pools li").allInnerTexts(), ["pool sapling: k=87 weighted=63.0 -> GREEN", "pool ironwood: k=9 weighted=6.5 -> AMBER"]);
+  assert.match(await page.locator("#crowd").innerText(), /^9 other shields and moves into ironwood \(the worst of the two pools\) of about 1\.24985000 ZEC /);
   assert.match(await page.locator("#pool option[value=any]").innerText(), /^Not sure \(check Sapling and Ironwood, show the worse\)$/);
   assert.doesNotMatch(await page.locator("#note").innerText(), /Orchard has no entries/, "a shield never goes into Orchard: no note about it");
   await scan("shield AMBER");
@@ -259,7 +259,7 @@ async function privacy(browser, origin, url) {
   await page.locator("#pool").selectOption("sapling");
   assert.equal((await page.locator("#verdict").innerText()).trim(), "GREEN");
   assert.equal((await page.locator("#msg").innerText()).trim(), "");
-  assert.match(await page.locator("#crowd").innerText(), /^88 other shields and moves into sapling of about 1\.24985000 ZEC /);
+  assert.match(await page.locator("#crowd").innerText(), /^87 other shields and moves into sapling of about 1\.24985000 ZEC /);
   await page.locator("#pool").selectOption("any");
   assert.equal(page.url(), url, "URL changed");
   assert.equal(log.routed.length, loaded.routed, `requests after load while typing: ${log.routed.slice(loaded.routed)}`);

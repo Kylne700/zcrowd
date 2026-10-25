@@ -971,11 +971,13 @@ fn a_window_shorter_than_the_lookback_is_a_short_window_without_slack() {
     assert!(!text(day).contains("the data covers"), "exactly the lookback is enough");
     assert!(text(day - 1).contains("warning: the data covers 30.00 days but the lookback is 30 days"));
     assert!(text(day - 3600).contains("warning: the data covers 29.96 days but the lookback is 30 days"));
-    // the committed 30-day sample (30.27 days) is long enough for a 30-day lookback, not for 31
+    // the committed sample (31.65 days: a 30-day sync plus its margin of 5%) is long enough for a 31-day lookback, not for 32
     let sample = format!("{}/../../fixtures/flows-sample.ndjson", env!("CARGO_MANIFEST_DIR"));
     let go = |days: &str| run(&["check", "--unshield", "-", "--lookback-days", days, "--data", &sample], Some("1.0\n")).1;
-    assert!(!go("30").contains("the data covers"), "{}", go("30"));
-    assert!(go("31").contains("warning: the data covers 30.27 days but the lookback is 31 days"), "{}", go("31"));
+    for days in ["30", "31"] {
+        assert!(!go(days).contains("the data covers"), "{}", go(days));
+    }
+    assert!(go("32").contains("warning: the data covers 31.65 days but the lookback is 32 days"), "{}", go("32"));
 }
 
 #[test]

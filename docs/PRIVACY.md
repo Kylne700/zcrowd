@@ -12,7 +12,8 @@ bash tests/e2e.sh            # formatting, lints, all 140 tests, the command lin
 ```
 
 A step that cannot run on a machine prints `SKIP ... (NOT VERIFIED)`; the audit counts the skips and its last line says
-so. Every result on this page is of the final code (commit `dd7f9ee`; the commits after it change documents only), run
+so. Every result on this page is of the final code (commit `dd7f9ee`; the commits after it change documents, the
+screenshot and 3 lines of `.github/workflows/ci.yml`; a result from a named CI run is of `70d5187`), run
 on 2026-10-25 on a Linux desktop (x86_64) with Rust 1.97.1. The limits of the whole tool are the one list in
 [README section 11](../README.md#11-honest-limits), and what was never run or seen is the one list
 [NOT VERIFIED](../README.md#not-verified) at the end of the README.
@@ -120,8 +121,9 @@ note: network cut for this command: seccomp socket filter (no empty network name
 blocked: Operation not permitted (os error 1)
 ```
 
-The other five lines are only asserted by the unit test: no run has reached them (the macOS code was never run, and Windows
-was never built).
+The macOS "profile applied" line was seen in CI only (job 121102516531 of run 40171306113, commit `70d5187`), never on a
+real Mac. The other four lines are only asserted by the unit test: no run has reached them (Windows was built and tested
+in CI only, job 121102516515, and CI runs no probe there).
 
 ### R: release archives
 
@@ -143,7 +145,7 @@ was never built).
 - **P10.** The script check is a list of API names, not a proof; the CSP is what stops a request. The audit runs Chromium only; Firefox and WebKit are covered by the separate run below, which the audit does not make. Real Safari is NOT VERIFIED. The CSP is a `<meta>` tag inside the file: it protects the copy you opened, and a host that serves you a modified copy is the reason to compare the SHA-256 of `web/index.html` (README section 3). Browser extensions can read what you type.
 - **P11.** A pattern scan (home paths, a personal string, mail-like strings), not a review of every file for personal facts.
 - **V11.** A Unified Address of a test network is tried; any other kind of address that `--to` does not take (a plain Sapling address, say) gets the same sentence by the code, and no test tries it.
-- **N.** Two of the seven lines were seen. The macOS lines come from code that was never run, and Windows was never built (README NOT VERIFIED).
+- **N.** Three of the seven lines were seen, the macOS one in CI only (job 121102516531), never on a real Mac. Windows was built and tested in CI only (job 121102516515); no run printed its line (README NOT VERIFIED).
 - **R1.** Linux only, and only by hand: `release.yml`, which runs the script for the three targets, has never run on GitHub, so the macOS and Windows archives are NOT VERIFIED. C code that `cc` compiles is not covered by the path remap; the scan would catch a leak from it (this run found none), and the fix would be `-ffile-prefix-map` in `CFLAGS`. The scan looks for the build machine's paths, not for other personal data.
 - **T1, T2, T5, T7.** The interposer sees libc calls, not raw system calls. The tests need Linux, `unshare -rn` and a C compiler; without them the audit prints `SKIP`. Tor failing to start is simulated by an empty network namespace (no network at all); a real network that blocks Tor was not tried.
 - **T3, T4, T6.** The interposer is evidence, not a packet capture: it sees `getaddrinfo`, `gethostbyname`, `connect`, `sendto`, `sendmsg` and `sendmmsg`, not raw system calls, and DNS on port 53 only when sent through those calls. Zero name lookups of any kind in Tor mode fits the design (the exit relay resolves the server name), but it is not a proof against code that bypasses libc. The Tor leg fetches only 20 transactions, one range, one run. The runs need the network and were made once on `d2f6ea9` (below), not by the offline audit.

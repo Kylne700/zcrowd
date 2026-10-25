@@ -13,7 +13,7 @@ bash tests/e2e.sh            # formatting, lints, all 140 tests, the command lin
 
 A step that cannot run on a machine prints `SKIP ... (NOT VERIFIED)`; the audit counts the skips and its last line says
 so. Every result on this page is of the final code (commit `dd7f9ee`; the commits after it change documents only), run
-on 2026-10-25 on Debian 13 (Linux 6.12, x86_64) with Rust 1.97.1. The limits of the whole tool are the one list in
+on 2026-10-25 on a Linux desktop (x86_64) with Rust 1.97.1. The limits of the whole tool are the one list in
 [README section 11](../README.md#11-honest-limits), and what was never run or seen is the one list
 [NOT VERIFIED](../README.md#not-verified) at the end of the README.
 

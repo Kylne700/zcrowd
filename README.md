@@ -15,7 +15,7 @@ web page. It computes only what any chain observer can already compute, for your
 | Track | ZECATHON, CORE & TOOLING. Licence: MIT (`LICENSE`). |
 | AI disclosure | Built by an AI agent team (Claude) for its author. |
 | Rust | 1.90 or newer (`rust-version` in `Cargo.toml`; `cargo +1.90.0 check --workspace --all-targets --locked` passes). The tests and the audit ran on 1.97.1, the version CI pins (the repository has no `rust-toolchain` file, so your own toolchain is used); the tests under 1.90 are NOT VERIFIED. A C compiler is needed (SQLite is bundled). |
-| First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, Debian 13, 20 cores, 62 GB RAM, crates already downloaded; a second run the same day, with other jobs using the machine (load average 4 before it started), took 101 s; a first build elsewhere also downloads the crates). |
+| First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, on a Linux desktop, crates already downloaded; a second run the same day, with other jobs using the machine (load average 4 before it started), took 101 s; a first build elsewhere also downloads the crates). |
 | Platform | Tested on Linux. macOS and Windows are NOT VERIFIED (end of this file). |
 | Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents only. |
 | Data | `fixtures/flows-sample.ndjson`: 74,643 real mainnet events, blocks 3,493,237 to 3,529,525 (2026-09-23 08:32 UTC to 2026-10-25 00:05 UTC, 31.65 days). The quick start and every example below run on it without a network. |
@@ -401,7 +401,7 @@ Error: no cache directory (XDG_CACHE_HOME and HOME not set, or not an absolute p
 Tor was selected, so zcrowd did not contact the server directly and will not fall back to a direct connection. To sync directly instead (the server then sees your IP address), run again with --no-tor.
 ```
 
-Measured sync times. Machine: Debian 13, 20 cores, 62 GB RAM, shared with other syncs and builds (load average 2 to 12), Tor
+Measured sync times. Machine: a Linux desktop, shared with other syncs and builds (load average 2 to 12), Tor
 state directory new for each run unless the row says otherwise, server `zec.rocks`, all runs on 2026-10-24 unless the
 row has another date (UTC). "Build" is the git commit of the release build that ran; `sync.rs`, `source.rs` and
 `ingest.rs` are identical at `f90836d`, `5d5ab27` and `dd7f9ee`.
@@ -1081,6 +1081,6 @@ Decoding and data
 The sandbox and the tests
 
 - `ptrace`, `process_vm_readv` and `process_vm_writev`, `pidfd_open` and `pidfd_getfd`, `/proc/<pid>/mem` and `TIOCSTI` against
-  the network cut: no such test was run; the one thing read was a host setting on one Debian 13 host (`dev.tty.legacy_tiocsti` was `0`).
+  the network cut: no such test was run; the one thing read was a host setting on one Linux desktop (`dev.tty.legacy_tiocsti` was `0`).
 - One transient failure of a command-line test (the test could not start the binary) in one full `cargo test` run on a busy
   machine; it did not return in the later runs, and its cause is unknown.

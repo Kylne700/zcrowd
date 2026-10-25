@@ -238,7 +238,7 @@ Decisions worth a reviewer's eye:
 
 The release binary (`cargo build --release -p zcrowd`, 1 min 13 s) synced about one day (1297 blocks, 2134 to 2188
 candidate transactions) four times, each into an empty output directory. The machine was shared with other work (load
-average 2 to 12 on 20 cores), so these show what a run looks like, not a clean benchmark. "Ready" is the time from
+average 2 to 12), so these show what a run looks like, not a clean benchmark. "Ready" is the time from
 starting the program to the connection being up (for Tor: the Tor start, with its state directory new or kept).
 
 | run | ready | 1297 blocks | transactions | total |
@@ -782,7 +782,7 @@ final-run numbers below are new.
 - **Left as they are: N2 and N3 of the third review (limits the docs must state, no code change).** The seccomp filter does not stop the
   same-user routes `ptrace`, `process_vm_readv`/`process_vm_writev`, `pidfd_open`/`pidfd_getfd` and `/proc/<pid>/mem` (N2), nor
   `ioctl(TIOCSTI)` (N3). The reason S4-9 above gives for calling this theoretical (Yama `ptrace_scope` 1, "the Ubuntu default") holds
-  where Yama is 1 or higher; on this Debian 13 host (kernel 6.12.111) `kernel.yama.ptrace_scope` is 0 and `dev.tty.legacy_tiocsti` is 0
+  where Yama is 1 or higher; on this Linux desktop `kernel.yama.ptrace_scope` is 0 and `dev.tty.legacy_tiocsti` is 0
   (both read in this stage; no ptrace or TIOCSTI test was run). The sandbox is defence in depth against our own process doing
   network I/O, not against another process of the same user; the docs have to say on which hosts that holds.
 
@@ -1000,7 +1000,7 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   names `master` only (`ci.yml` also names `main`). Do this before the first push of `pages.yml`, or its first runs fail in the
   Actions tab.
 - N2 and N3 of the third review stay as limits the docs must state (see the S9g stage): same-user ptrace and friends, and TIOCSTI, are not
-  filtered, and the Yama setting that made them theoretical is Ubuntu's default (1); this Debian host has 0.
+  filtered, and the Yama setting that made them theoretical is Ubuntu's default (1); this Linux desktop has 0.
 - Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
   it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage
   timed Tor syncs of one and of 30 days (see "Measured sync times").

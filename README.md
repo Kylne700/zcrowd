@@ -15,7 +15,7 @@ web page. It computes only what any chain observer can already compute, for your
 | Track | ZECATHON, CORE & TOOLING. Licence: MIT (`LICENSE`). |
 | AI disclosure | Built by an AI agent team (Claude) for its author. |
 | Rust | 1.90 or newer (`rust-version` in `Cargo.toml`; `cargo +1.90.0 check --workspace --all-targets --locked` passes). The tests and the audit ran on 1.97.1, the version CI pins (the repository has no `rust-toolchain` file, so your own toolchain is used); the tests under 1.90 are NOT VERIFIED. A C compiler is needed (SQLite is bundled). |
-| First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, Debian 13, 20 cores, 62 GB RAM, crates already downloaded; a first build elsewhere also downloads them). |
+| First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, Debian 13, 20 cores, 62 GB RAM, crates already downloaded; a second run the same day, with other jobs using the machine (load average 4 before it started), took 101 s; a first build elsewhere also downloads the crates). |
 | Platform | Tested on Linux. macOS and Windows are NOT VERIFIED (end of this file). |
 | Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents only. |
 | Data | `fixtures/flows-sample.ndjson`: 74,643 real mainnet events, blocks 3,493,237 to 3,529,525 (2026-09-23 08:32 UTC to 2026-10-25 00:05 UTC, 31.65 days). The quick start and every example below run on it without a network. |
@@ -198,8 +198,9 @@ bash tests/audit.sh
 It needs Linux, git, python3, a C compiler and the Rust toolchain, builds the project first, and needs no network. Without
 `PLAYWRIGHT_CORE` (a `playwright-core` directory, which adds the headless-browser test of the page) and without `LIVE=1` (a
 real Tor sync under a recorder of every name lookup and connection, section 8) two checks are skipped and printed as
-`SKIP ... (NOT VERIFIED)`. Output on a cold target directory, crates already downloaded, 144 s, exit 0 (2026-10-25; lines
-cut at 120 characters; the commit count in the P11 line is higher in a clone that has more commits):
+`SKIP ... (NOT VERIFIED)`. Output on a cold target directory, crates already downloaded, 144 s, exit 0 (2026-10-25; a second run in a fresh clone
+took 167 s and printed the same lines; lines cut at 120 characters; the commit count in the P11 line is higher in a clone
+that has more commits):
 
 ```
 ok    build
@@ -381,8 +382,9 @@ and written in candidate order, so the file is byte-identical to the one `--no-t
 one-day runs, Tor and direct, has one SHA-256). The 4 connections and the 10 minutes are guesses that were never tuned,
 and up to 4 exit relays see one sync. The Tor state directory (`--tor-dir`, default `$XDG_CACHE_HOME/zcrowd/tor` or
 `~/.cache/zcrowd/tor`; `%LOCALAPPDATA%\zcrowd\tor` on Windows, NOT VERIFIED) is about 39 MB. A bad certificate over Tor
-stops the sync (checked by hand on 2026-10-24 against badssl.com hosts: `invalid peer certificate: certificate not valid for name`
-and `UnknownIssuer`, exit status 1, no data file, no direct fallback). An expired certificate was refused with
+stops the sync (checked by hand on 2026-10-24, on a build from before the final code and not repeated on it, against
+badssl.com hosts: `invalid peer certificate: certificate not valid for name` and `UnknownIssuer`, exit status 1, no data
+file, no direct fallback). An expired certificate was refused with
 `certificate expired` in an earlier test (0.8 s direct, 3.8 s over a warm Tor) and timed out twice in a later one, so that case is
 NOT VERIFIED as repeatable. In one test the first connection
 through a freshly started Tor to a host other than `zec.rocks` timed out at the exit after 23 s
@@ -911,7 +913,8 @@ Tor
   can match timing. Up to four exit relays see one sync. The 4 connections and the 10-minute replacement are guesses that
   were not tuned; this README does not claim that they are faster or steadier.
 - **Certificates.** TLS to the server is verified against the webpki roots and not pinned. A bad certificate over Tor was
-  refused in two hand tests (section 4); that is not an automated test.
+  refused in two hand tests on a build from before the final code (section 4); that is not an automated test, and it was
+  not repeated on the final code.
 - **Start-up and cost.** The first Tor run can take a minute (the program says so) and downloads about 39 MB of Tor state;
   `sync` gives up after 120 s with an error that names `--no-tor`. A cold 30-day sync over Tor took 2 h 25 min on an older
   build (section 4), and the raw transaction cache of 30 days is 1.59 GB.
@@ -967,7 +970,7 @@ LIVE=1 bash tests/audit.sh      # also the live Tor leak check (real network, a 
   coinbase, a move, unshields that leave two or three pools at once, transactions that cross nothing). The ingest tests
   use a fake server that lies in the ways of section 9. The sample tests decode the 20 explorer-checked events.
 - `tests/audit.sh` runs one check per claim of `docs/PRIVACY.md`. Offline it took about 100 s on a warm build directory
-  and 144 s on a cold one without the headless test. `tests/e2e.sh` took 123 to 129 s offline. With `LIVE=1` (the real Tor
+  and 144 s on a cold one without the headless test (167 s in a second run, in a fresh clone). `tests/e2e.sh` took 123 to 129 s offline. With `LIVE=1` (the real Tor
   sync) the audit took 236 s and `tests/e2e.sh` 470 s. All on 2026-10-25; the `LIVE=1` runs were made on `d2f6ea9`, which
   differs from `dd7f9ee` by one comment in `check.rs` and by `NOTES.md`.
 - The page: `node web/test/parity.mjs` compares the page with the Rust scoring on 1,008 cases (128 sample amounts, 20 rejected

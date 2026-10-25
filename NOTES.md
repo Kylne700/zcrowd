@@ -288,6 +288,14 @@ A 16-day Tor sync (37,986 candidates, 416 MB of raw transactions; build before t
 the 30-day file above on the same heights, line for line, and a `--no-tor` sync of the same range on the transactions that
 run saved wrote the same file (same SHA-256). A 30-day sync (75,606 candidates) at that rate takes about 2 h 25 min.
 
+The same 30-day command was run once more in S9e, over Tor with a release build (`zcrowd sync --days 30`, a Tor state directory of
+its own) and with the 75,606 transactions of the 30-day run above copied into its transaction directory first: 236 s (2026-10-25
+00:21:11 to 00:25:07 UTC), exit code 0. The 36,289 blocks took 178 s (203.8 per second; 777 s and 477 s in the two processes above),
+then the 74,655 candidates 35 s: 74,409 from the cache (each re-checked against its txid) and 246 fetched, at 16.7 per second over
+the 14.7 s they took (13.1 and 11.5 per second in the two 10 s windows; the run is too short for windows of 10 minutes). It is the
+time of a warm cache, not of a cold sync, and a cold 30-day sync of the final code was not repeated (NOT VERIFIED). The output of that
+run is in "Merge, F8 h and data refresh stage (S9e)".
+
 ### Final run (review-fix stage, last code commit a29b5d3)
 
 Real output of `PLAYWRIGHT_CORE=<playwright-core dir> LIVE=1 bash tests/e2e.sh` (it runs `tests/audit.sh` with the same
@@ -366,7 +374,7 @@ is a count, not a rewrite.
   `Error: DIFF: recomputed event differs from the cached line` (exit 1). `sync` replaces the events inside the new range and keeps
   older ones as they are, so the refresh must cover the old range or write a fresh `--out`. `FORMAT_VERSION` stays 2: files
   stay readable, one field of one kind of event was corrected. `rg -c '"coinbase":true.*"src"' fixtures/flows-sample.ndjson`
-  prints 1466 now and must print nothing after the refresh. `web/index.html` embeds the sample: rebuild it with `node web/build.mjs` then.
+  prints 1466 now and must print nothing after the refresh (it does since S9e). `web/index.html` embeds the sample: rebuild it with `node web/build.mjs` then.
 - **SQLite.** The crate that pulls it is `zcrowd-core` (`zcash_client_backend` with `tor` -> arti -> `tor-dirmgr` -> `rusqlite 0.39`
   -> `libsqlite3-sys 0.37`); features unify over the workspace. Arti's directory cache is a SQLite file (`arti-cache/dir.sqlite3`),
   so a real Tor sync is the runtime test: `LIVE=1 bash tests/audit.sh` below ran it with the new binary. A C compiler is not a
@@ -519,7 +527,7 @@ it with the Rust output wherever the case is reachable):
   not authenticated by the txid), as the brief says.
 
 The sample and the number in the examples above are those of the unchanged sample; the stale coinbase `src` lines of the sample
-(1,466) are still in it, `verify` on them shows DIFF until the data refresh (S9e).
+(1,466) are still in it, `verify` on them showed DIFF until the data refresh (S9e: done, the refreshed sample has none).
 
 ### Final run (S9d)
 
@@ -546,6 +554,177 @@ profile, load average 1 to 3, `PLAYWRIGHT_CORE=<playwright-core dir>`, no `LIVE=
 Not run: `LIVE=1 bash tests/audit.sh` (T3/T4/T6) and the `LIVE=1` sync of `tests/e2e.sh`. `sync` itself is untouched by this
 stage (`source.rs`, `ingest.rs` and `sync.rs` are as in S9c, and `sync` does not enter the sandbox), so the live audit of
 S9c still describes it; what this stage changed on that path is the `--tor-dir` argument of the e2e line (NOT VERIFIED).
+
+## Merge, F8 h and data refresh stage (S9e)
+
+Master is S9d's master (13374bd) with branch `sync` (S9t) merged (a31810f) and the items below, one commit each. This stage
+refreshed the committed sample, so every sample number in the stages above is a number of the old sample (blocks
+3494295..3528999, 67,965 events); the table below puts the old and the new side by side.
+
+- **Merge (a31810f, f90836d).** `git merge-tree` showed no conflict (the branch touches `source.rs`, `ingest.rs`, `sync.rs`,
+  their tests, one line of `cli.rs` and one of `crates/zcrowd/Cargo.toml`), `git merge --no-ff sync` made a31810f, and S9t's
+  NOTES text (what sets the Tor pace, the tree-state pool check, the new open problems) is folded in (f90836d). After the
+  merge `zcrowd sync --help` still describes `--tor-dir` as Tor's state directory, which the LIVE sync of `tests/e2e.sh`
+  and `tests/leakcheck/run.sh` rely on, and both workflow files parse (PyYAML `safe_load`).
+- **Windows (ee98457).** `crates/zcrowd/tests/stop.rs` sends SIGINT and SIGTERM with `libc::kill`, which the libc crate does
+  not have on Windows, and the CI matrix builds on `windows-latest`: the file is now `#![cfg(unix)]`. The non-Unix
+  `stop_signal` in `sync.rs` (`tokio::signal::ctrl_c`; the `signal` feature is on for every target) has nothing in it that
+  cannot compile there, and no test sends it a Ctrl-C. The Windows build itself is NOT VERIFIED (no Windows target and no
+  mingw here): the Windows CI job is the check.
+- **F8 h (578edd2).** A shield or a move into more than one pool at once is low confidence and an entry of no pool, so no
+  crowd counts it; when some lie in the lookback and amount windows of a check, a NO MATCH or a small crowd can be wrong
+  by that many, and the check kept quiet. `uncounted` in `crowd.rs` counts them (Shield and Move only, in any pool, with
+  the same `in_windows` that `in_scope` uses, so the two cannot drift apart) and `check` ends its notes with one line:
+  `note: low-confidence shields or moves of about this amount: N. A transaction that goes into more than one pool at once
+  is not counted in any crowd, so a NO MATCH or a small crowd can be wrong here` (text: after `verdict:`; `--json`: the
+  last of `notes`; the page prints the same sentence with a full stop). The page gets the count from a new `DATA.low`
+  (`[time, zatoshi]` of each such event, no txid; `pageLow` in `web/build.mjs`). Tests: core
+  `low_confidence_entries_in_both_windows_are_counted_apart_and_never_in_a_crowd`, cli
+  `low_confidence_shields_in_the_window_are_told_and_never_counted` (it failed against the old `check.rs` with
+  `left (None, 3) right (Some(3), 3)`), and `web/test/parity.mjs` compares the page's count with the CLI note in every one of
+  its comparisons, with two synthetic low-confidence events added (a page that ignores the lookback or the mode of the
+  check fails it; both were tried). All 152 low-confidence events of the new sample are unshields (the old sample's 140
+  were too), so the note never shows on the sample; it is covered by those tests, not by the sample.
+- **Refresh (046cc27).** One 30-day sync over Tor (`--tor-dir` of its own, the default four connections, server `zec.rocks`;
+  release build of f90836d, and only `crowd.rs`, `check.rs` and tests changed after it), with the transaction cache of
+  the 30-day run of the review-fix stage (75,606 files, see "Measured sync times") copied into the output directory first,
+  so that only new transactions had to be fetched. It ran once, ended with exit code 0 and took **236 s** (2026-10-25
+  00:21:11 to 00:25:07 UTC). Its stdout:
+
+```
+blocks=36289 txs=284182 shield_like=30830 (coinbase 1635) unshield_like=40307 move_like=3518 range=3493237..3529525 secs=178.1
+pools: of the 36289 blocks from block 3428143 (NU6.3) on, 5803 hold Sapling data, 2659 Orchard, 23266 Ironwood
+tree check: the server's tree states (blocks 3493236 and 3529525) grew by Sapling 16169, Orchard 11398, Ironwood 325664 note commitments, exactly what its blocks hold
+events=74643 shields=30783 unshields=40350 moves=3510 fetched_txs=246 cached_txs=74409 secs=213.3
+excluded: no_net_crossing=4 no_transparent_part=8 multi_pool(kept, low confidence, not counted in crowds)=152
+integrity: transaction id recomputed from the raw bytes for 74655 of 74655 candidates, 0 did not match (dropped); block hash chain checked over 36289 blocks
+wrote /tmp/s9e/refresh/flows.ndjson (raw transactions cached in /tmp/s9e/refresh/tx)
+tip: sync on a schedule, not right before you transact. The server learns nothing about your wallet, and over Tor (the default) it does not see your IP address either; with --no-tor it does.
+```
+
+  The time is that of a warm cache: 74,409 of the 74,655 candidates were read from `tx/` (each file is re-checked against
+  its txid when read) and 246 were fetched, 16.7 per second over the 14.7 s they took (13.1 and 11.5 per second in the two
+  10 s windows; the run was too short for windows of 10 minutes). The block crawl took 178 s (203.8 blocks per second; the
+  same 36,289 blocks took 777 s and 477 s in the two processes of the review-fix stage), the events phase 35 s, Tor's start
+  and the write about 23 s. A cold 30-day sync was not repeated (the cold numbers are in "Measured sync times"). Debug
+  builds and tests ran beside it under `nice -n 19`. The range is 36,289 blocks, not 34,560: `margin()` adds 5% of the days
+  (1,728 blocks) to `--days 30`
+  (at least 144), so the span is 31.65 days (the old sample had the 144-block margin of the first sync, 30.27 days), and
+  `check --lookback-days 32` now warns (`the data covers 31.65 days`), 31 does not.
+  - Checks of the new file: a throwaway release example decoded all 74,643 events again from their cached raw
+    transactions with the tip's decoder: `events=74643 identical=74643 (of them low-confidence 152, coinbase 1635) diff=0
+    now-skipped=0 no-raw=0` (deleted, not committed). `zcrowd verify <txid> --data <flows> --raw-dir <tx>` printed `MATCH` for a
+    shielded coinbase, a low-confidence event and the newest cached transaction. `rg -c '"coinbase":true.*"src"'
+    fixtures/flows-sample.ndjson` prints nothing now (it printed 1466; none of the 1,635 coinbase shields has a `src`).
+  - Changed with the new sample: `fixtures/flows-sample.ndjson`, its meta, `web/index.html` (`node web/build.mjs`), the
+    literals of `tests/e2e.sh` (1.0 ZEC: Ironwood 160 entries, weighted 111.0; 1.2497: Ironwood 591, weighted 438.0, Sapling
+    157 / 114.5 as before; 125 ZEC: Sapling 32 / 24.0; the report rows RED 1412 8.0% and NO MATCH 3695 20.8% of 17739; the
+    `five_lines` example `crowd 591 -> GREEN`), of `web/test/headless.mjs` (the same Ironwood numbers; the 1.24985 shield
+    now has 87 in Sapling and 9 in Ironwood) and the cli test `a_window_shorter_than_the_lookback_is_a_short_window_without_slack`
+    (it assumed the old 30.27 days; a lookback of 31 days no longer warns). `3.73` (k=1, RED) and `0.27952119` (k=3, AMBER) are
+    unchanged. `parity.mjs` now finds 3 sample comparisons with a time tie (S9d: 9). The `tests/e2e.sh` message that says
+    "as the README says" is true after the README is updated with the numbers below (the docs stage).
+  - The stale coinbase `src` (S9c) is gone: the sample was decoded by the fixed decoder, so `verify` of a coinbase shield
+    of the sample no longer prints DIFF.
+
+| | old sample (until S9d) | new sample (046cc27) |
+|---|---|---|
+| blocks, span | 3494295..3528999 (34,705), 30.27 days | 3493237..3529525 (36,289), 31.65 days |
+| first and newest block (UTC) | 2026-09-24 06:39 and 2026-10-24 13:05 | 2026-09-23 08:32 and 2026-10-25 00:05 |
+| events: shields, unshields, moves | 67,965: 28,650, 36,492, 2,823 | 74,643: 30,783, 40,350, 3,510 |
+| low confidence (all unshields) | 140 | 152 |
+| shielded coinbase | 1,564 (1,466 with a made-up `src`) | 1,635 (none with a `src`) |
+| Orchard events (all unshields) | 443 | 500 |
+| entries (High shields and moves) | 31,473 | 34,293: Ironwood 29,800, Sapling 4,493, Orchard 0 |
+| unshields of the last 14 days | 17,827 | 17,739 |
+| NO MATCH, RED, AMBER, GREEN | 3,642 (20.4%), 1,405 (7.9%), 2,561 (14.4%), 10,219 (57.3%) | 3,695 (20.8%), 1,412 (8.0%), 2,541 (14.3%), 10,091 (56.9%) |
+| 1.0 ZEC | Ironwood 162 | Ironwood 160 (weighted 111.0) |
+| 1.2497 ZEC | Ironwood 592 (437.0), Sapling 157 | Ironwood 591 (438.0), Sapling 157 |
+| 125 ZEC | Sapling 40 | Sapling 32 |
+| `--shield 1.24985` | Sapling 88 (64.5), Ironwood 8 (6.0) | Sapling 87 (63.0), Ironwood 9 (6.5) |
+| events file, `web/index.html` | 17,770,521 and 771,319 bytes | 19,396,366 and 835,793 bytes |
+
+### Final run (S9e)
+
+The code is that of 046cc27 (F8 h is 578edd2). The one commit after it, 07043d0, edits a comment in
+`crates/zcrowd-core/tests/sample.rs`; after it `cargo fmt --check`, a cold `cargo clippy` and `cargo test` (twice) ran again, and
+the commits after that change NOTES.md only. Debug profile, load average 1 to 2, `PLAYWRIGHT_CORE=<playwright-core dir>`, one
+command after the other, 2026-10-25. Every command ended with exit 0:
+
+- `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`. The second clippy run (after 07043d0) came after
+  `cargo clean -p zcrowd -p zcrowd-core`, so nothing was cached: both crates checked, no warning.
+- `cargo test`, twice in a row: 139 tests passed, 0 failed, every time (15 s and 16 s; 17 s and 16 s after 07043d0; 112 tests in
+  the S9d run).
+- `cargo +1.90.0 check --workspace --all-targets --locked` (the `rust-version`, offline): 23 s.
+- `bash tests/e2e.sh`: `E2E OK`, 123 s, 30 `ok` lines and its own `skip  LIVE=1 not set`; inside it `AUDIT OK (1 check(s)
+  skipped and NOT VERIFIED ...)`, the one skipped check being T3/T4/T6 (the live Tor leak check).
+- `bash tests/audit.sh` alone: `AUDIT OK`, 99 s, 22 `ok` lines, the same one SKIP.
+- `LIVE=1 bash tests/audit.sh` alone: `AUDIT OK`, 250 s, 23 `ok` lines, no SKIP (161 s at d5d3939, above, when the audit had 20
+  check lines; it has 22 now). Its T3/T4/T6 line: lookups of any name 0, of the server name 0, connects to server IPs 0, port-53
+  sends 0, 8 distinct connect destinations (Tor relays); through Tor the tip, every block and 20 transactions; 6 files, all arti
+  directory data, guard state or locks, none mentions the server name.
+- `LIVE=1 bash tests/e2e.sh`: `E2E OK`, 435 s, all 34 lines below.
+- `node web/test/parity.mjs`, 70 s: `PARITY OK: 1008 JS-vs-Rust comparisons (128 sample amounts, 20 rejected inputs, synthetic
+  edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (3 sample and 39 synthetic
+  comparisons with a time tie)`.
+- `BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`, 15 s: `HEADLESS OK (chromium 154.0.8037.92, firefox 157.0,
+  webkit 27.2; the server saw 3 page loads and nothing else)`.
+- Both workflow files (`ci.yml`, `release.yml`) parse (PyYAML `safe_load`).
+- The privacy scan of the repository over all branches (counts, run on 07043d0): 0 tree files and 0 history lines with a
+  personal-string hit, 0 mail addresses in files, 0 home paths in files and history, 0 key-like files, 0 hits in the HEAD
+  message; one author and committer (the neutral address; 90 commits over all branches); the only mail domains in history are
+  that address's and the `noreply` trailer's.
+
+Real output of `PLAYWRIGHT_CORE=<playwright-core dir> LIVE=1 bash tests/e2e.sh` (it runs `tests/audit.sh` with the same `LIVE=1`)
+on the code of 046cc27, all 34 lines, nothing removed or condensed; exit code 0, 435 s in all (network: the live one-day sync and
+the Tor leak check):
+
+```
+ok    cargo fmt --check
+ok    cargo clippy --all-targets -D warnings
+ok    cargo test: 139 tests passed, 0 failed
+ok    offline sync from fixtures: 3 events, range ends at tip-10 (3522630), 3 of 3 txids recomputed, 0 mismatches
+ok    check: one verdict line and one crowd line each time, a line per pool; 1.0 GREEN (ironwood k=160); 1.2497 k=157 weighted=114.5 GREEN (text and --json); --pool; 125 ZEC Sapling k=32 vs Ironwood NO MATCH; the Ironwood-only round trip is found; 3.73 k=1 RED; --to a shield source address RED (text and --json overall verdict)
+ok    report on the committed sample: 17739 unshields in the last 14 days = NO MATCH 3695 (20.8%), RED 1412 (8.0%), as the README says
+ok    verify of a fixture transaction: MATCH (decoded from the cached raw bytes, offline)
+ok    example five_lines prints: crowd 591 -> GREEN
+ok    LIVE one-day sync: transaction id recomputed from the raw bytes for 2087 of 2087 candidates, 0 did not match (dropped); block hash chain checked over 1297 blocks
+ok    build
+ok    P1 sync requests depend only on the block range (test sync_requests_depend_only_on_range)
+ok    P2 check, report and verify run with the network removed from outside (unshare -rn)
+ok    P2 check.rs, report.rs and verify.rs import no network code (no source, tonic, tokio, std::net, Lwd, sockets)
+ok    P2 the process cuts its own network: a loopback connection works before and fails after (test sandbox_blocks_connections)
+ok    P2 the seccomp filter refuses TCP, UDP, Unix sockets, socketpair, io_uring and other ABIs, through enter() and alone (tests sandbox::tests::*)
+ok    P2 check, report and verify each install the seccomp filter before they read their data (test check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything)
+ok    P3 only ingest.rs (raw cache), model.rs (the flows files, called by sync only), report.rs (report), sync.rs (lock file) and source.rs (Tor state directory, sync only) write files; check.rs and verify.rs cannot
+ok    P3 random address and amount typed via stdin and arguments: not in any file, no file created, neither echoed in the output (text, --json, --shield, arguments)
+ok    P4 no mnemonic, seed, viewing-key or ufvk anywhere in crates/
+ok    P5 525 crate versions in cargo tree (624 packages in Cargo.lock), none of reqwest, sentry, posthog, segment, openssl, native-tls, analytics, telemetry, update; Cargo.lock tracked
+ok    P6 sync --server http://... is refused before any connection (run with the network removed)
+ok    P6 a local TLS server with a self-signed certificate is rejected (invalid peer certificate: UnknownIssuer)
+ok    P7 flows file keys, cache file names and the directory listing contain only public chain fields
+ok    P8 wrong txid dropped and counted, broken prevHash and gaps are errors (tests wrong_or_broken_transactions_are_dropped_counted_and_never_cached, broken_block_chain_is_an_error, block_chain_is_checked_across_request_chunks)
+ok    P9 report HTML has no src, href, url(), http(s), @import or script
+ok    P10 web/index.html: CSP with connect-src, form-action, base-uri none; no external reference; no network, storage or navigation API in its script; no <form>
+ok    P10 PARITY OK: 1008 JS-vs-Rust comparisons (128 sample amounts, 20 rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (3 sample and 39 synthetic comparisons with a time tie)
+ok    P10 web/index.html equals what web/build.mjs builds from the template and the committed sample
+ok    P10 headless Chromium: zero requests while typing, CSP blocks injected fetch, image, beacon, WebSocket and form (http:// and file://)
+ok    P11 no home path, mail address or personal string in tracked or untracked files; 84 commits, one neutral identity; no remote but the project's own; data/ and target/ ignored
+ok    T1/T2/T5/T7 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes no output; --no-tor is the control the shim sees; also flag conflicts, plain-text URL refused before Tor starts, --end-height reorg margin (crates/zcrowd/tests/tor.rs)
+ok    T3/T4/T6 lookups (any name)=0, lookups of the server name=0, connects to server IPs=0, port-53 sends=0, distinct connect destinations (Tor relays)=9; through Tor: the tip, every block and 20 transactions; 6 files, all arti directory data, guard state or locks; 0 mention the server name
+AUDIT OK
+E2E OK
+```
+
+`diff` against the same run of the review-fix stage above shows eight lines that differ and two that are new: the test count
+(139, was 96); the `check:` line (1.0 ZEC Ironwood k=160, was 162; 125 ZEC Sapling k=32, was 40); the report line (17739
+unshields: NO MATCH 3695 (20.8%), RED 1412 (8.0%); was 17827, 3642 and 1405); `crowd 591` (was 592); the live one-day sync (2087
+candidates in 1297 blocks; 2138 in the same 1297 blocks); the parity line (1008 comparisons, was 760, and it names the time ties);
+the P11 line (84 commits, was 34); the T3/T4/T6 line (9 relays, was 8; it differs run to run); and the two P2 seccomp lines that
+the sandbox stage added.
+
+Not run: the Windows build and tests, a cold 30-day sync of the final code, and the F8 h sentence in a browser; see the S9e
+bullet of the NOT VERIFIED list below.
 
 ## Deviations from the first design (and why)
 
@@ -634,7 +813,7 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   of the range is noticed. Open: a server that lies in both its blocks and its tree states; servers without tree states
   (fallback only, see the pool check above).
 - The consensus side of the Orchard finding above is taken from the text of ZIP 258 (Final), not from node code: zebrad and
-  zcashd were not read, and the sample holds no entry into Orchard to test the rule against (its 443 Orchard events are
+  zcashd were not read, and the sample holds no entry into Orchard to test the rule against (its 500 Orchard events (443 before the S9e refresh) are
   all unshields). The oldest Rust that builds the workspace
   is 1.90 (`rust-version`; `cargo +1.90.0 check --workspace --all-targets --locked` passes, S9c); the tests ran with 1.97.1 only. Whether
   the empty network namespace works on a default Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`): the
@@ -648,9 +827,13 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   Peers seen: the chosen server on 443 and the DNS resolver on UDP 53. Sampling can miss short-lived sockets. (A first
   attempt filtered by process name also matched the parallel Tor agent's `zcrowd` process: always filter by pid.)
 - `strace` is not installed here, so no `connect()` list from the kernel.
-- S9d: the `LIVE=1` one-day sync of `tests/e2e.sh` after the `--tor-dir` change (`bash -n` only); the GitHub CI runs of the
+- S9d: the `LIVE=1` one-day sync of `tests/e2e.sh` after the `--tor-dir` change (`bash -n` only; S9e ran it, see "Final run (S9e)"); the GitHub CI runs of the
   `sandbox` job and of the macOS step (no run exists; the YAML was parsed with PyYAML only); a bad certificate over Tor for
   `expired.badssl.com` (timed out twice in the review; the two other cases were checked by hand on 2026-10-24).
+- S9e: the Windows build and test run (`tests/stop.rs` is `#![cfg(unix)]`; there is no Windows target here, the Windows CI job is
+  the check); a cold 30-day sync of the final code over Tor (the refresh took 236 s with a warm cache); the F8 h line in a
+  browser and on the real sample (the sample has no low-confidence shield or move; `parity.mjs` compares the page's count with the
+  CLI's, no headless test reaches the sentence).
 
 ## Open problems and hand-over
 
@@ -675,9 +858,12 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   the numbers of this stage a scheduler that prefers the faster connection would add 5 to 7 percent at most), a retry of
   a whole block range beyond the limits above, a shorter request limit (the Tor client library already sets 60 s per
   request and an HTTP/2 keep-alive).
-- The sample goes stale: after 2026-10-24 about 15:05 UTC `check` on it prints stale-data warnings (the README says so).
+- The sample goes stale: after 2026-10-25 about 02:05 UTC (its newest block is from 00:05 UTC) `check` on it prints stale-data
+  warnings (the README says so). A new refresh is cheap while `/tmp/s9e/refresh/tx` exists (see the next point).
 - `data/` (1.5 GB on disk, 67,977 raw transactions plus the events file, gitignored) from the 30-day sync is left in
-  the working tree, and `target/debug/zcrowd` is a fresh build for the video agent.
+  the working tree, and `target/debug/zcrowd` is a fresh build for the video agent. The S9e refresh kept its own directory
+  outside the tree, `/tmp/s9e/refresh` (75,852 raw transactions, 1.76 GB on disk, the events file, the sync logs): a second
+  refresh over it fetches only what is new. `/tmp` is a tmpfs here, so it is gone after a reboot.
 - The README never says "linked" or "deanonymised" about the sample: it says "exactly
   one earlier shield of about that amount in the 14 days before".
 - Review hints: `crates/zcrowd-core/src/ingest.rs` (`link`, `resolve`), `source.rs` (`require_tls`, `Lwd::try_one`),

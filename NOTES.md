@@ -643,7 +643,7 @@ tip: sync on a schedule, not right before you transact. The server learns nothin
 | 1.2497 ZEC | Ironwood 592 (437.0), Sapling 157 | Ironwood 591 (438.0), Sapling 157 |
 | 125 ZEC | Sapling 40 | Sapling 32 |
 | `--shield 1.24985` | Sapling 88 (64.5), Ironwood 8 (6.0) | Sapling 87 (63.0), Ironwood 9 (6.5) |
-| events file, `web/index.html` | 17,770,521 and 771,319 bytes | 19,396,366 and 835,793 bytes |
+| events file, `web/index.html` | 17,770,521 and 771,319 bytes | 19,396,366 and 835,793 bytes (the page: 836,193 since the commit that adds its first box) |
 
 ### Final run (S9e)
 

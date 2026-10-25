@@ -126,6 +126,8 @@ ok "check: one verdict line and one crowd line each time, a line per pool; 1.0 G
 grep -Fq '<tr><td>RED</td><td>1412</td><td>8.0%</td></tr>' "$T/r.html" || die "report: the README figure (1412 RED, 8.0%) is not what the report shows"
 grep -Fq '<tr><td>NO MATCH</td><td>3695</td><td>20.8%</td></tr>' "$T/r.html" || die "report: NO MATCH row differs from the README figure"
 ok "report on the committed sample: 17739 unshields in the last 14 days = NO MATCH 3695 (20.8%), RED 1412 (8.0%), as the README says"
+grep -Fq 'Of 17,739 unshields in the last 14 days of this sample, 1,412 (8.0%)' web/index.template.html || die "web page: the figures in its first box are not the report's (17739 unshields, RED 1412, 8.0%)"
+ok "web page: the first box quotes the same figures as the report"
 "$BIN" verify 954c19b2c73e667170c28b8d3a94fd96582cba736a5ed7275a10fc0c3e64e149 --data "$D" --raw-dir fixtures/raw >"$T/v" 2>&1 || die "verify"
 grep -q '^MATCH' "$T/v" || die "verify: no MATCH line"
 ok "verify of a fixture transaction: MATCH (decoded from the cached raw bytes, offline)"

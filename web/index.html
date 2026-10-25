@@ -25,11 +25,13 @@
   :focus-visible { outline: 3px solid #0550ae; outline-offset: 2px; }
   ::placeholder { color: #57606a; opacity: 1; }
   select { max-width: 100%; }
+  .hero { border: 1px solid #d0d7de; padding: .4rem .8rem; margin: .75rem 0; line-height: 1.4; }
 </style>
 </head>
 <body>
 <h1>zcrowd</h1>
 <p>Before you move Zcash between a transparent and a shielded address, see how many earlier transactions look like yours. Pick a direction and a shielded pool, type an amount. Runs entirely in this page, on a frozen sample of public mainnet data.</p>
+<p class="hero"><b>Of 17,739 unshields in the last 14 days of this sample, 1,412 (8.0%) had exactly one earlier shield or move of about their amount into the same pool in the 14 days before them.</b> <span class="small">One candidate for an observer who matches amounts, not proof of a link.</span></p>
 <p class="small" id="snapshot"></p>
 
 <p class="box" id="cannot-send"><b>This page cannot send anything: its Content-Security-Policy blocks all network requests. Check DevTools &gt; Network.</b><br>

@@ -751,9 +751,9 @@ final-run numbers below are new.
   (`addr_open`), in every pool, Orchard included; a shield source is RED for good and adds nothing. The complete rule, which
   replaces those of S3-1 and F1 above: the line (after `verdict:` and `amount:`; in `--json` among the `notes`) is printed when
   (a) a pool the check shows is NO MATCH or RED, Orchard excepted (every pool under `any`, the chosen one otherwise); or (b) the
-  overall verdict is NO MATCH or RED and the pool of the `crowd:` line is not Orchard (so a RED address prints it under every pool
-  but Orchard, which `no_match_and_red_say_that_shields_after_the_last_block_are_not_counted` pins); or (c) `--to` is given and
-  its finding is clear or AMBER. `--shield --to` is refused, so shield mode cannot have the case.
+  overall verdict is NO MATCH or RED and the pool of the `crowd:` line is not Orchard (so a RED address prints it whenever that
+  pool is not Orchard; `no_match_and_red_say_that_shields_after_the_last_block_are_not_counted` pins `--pool sapling`); or (c)
+  `--to` is given and its finding is clear or AMBER. `--shield --to` is refused, so shield mode cannot have the case.
   Test `an_address_that_is_not_a_shield_source_says_that_shields_after_the_last_block_are_not_counted` (cli): 12 shields into
   Sapling and 12 into Ironwood, none into Orchard (GREEN, GREEN, NO MATCH), a month of data whose newest block is 10 minutes old
   (so no warning could explain the line); `--pool any`, `sapling`, `orchard`, `ironwood` x a clear and an AMBER address x text and
@@ -778,11 +778,11 @@ final-run numbers below are new.
   each tag pointing at a commit). All three workflow files parse (PyYAML `safe_load`) and a script asserted the triggers,
   permissions, job layout and pins. **It has not run:** a person must set Settings > Pages > Source to "GitHub Actions" once (a
   Free plan also needs a public repository), and the environment `github-pages` must allow `master`; until then the `deploy` job
-  fails on every push. NOT VERIFIED.
+  is expected to fail on every push, so switch Pages on before the first push of this workflow. NOT VERIFIED.
 - **Left as they are: N2 and N3 of the third review (documented limits, no code change).** The seccomp filter does not stop the
   same-user routes `ptrace`, `process_vm_readv`/`process_vm_writev`, `pidfd_open`/`pidfd_getfd` and `/proc/<pid>/mem` (N2), nor
-  `ioctl(TIOCSTI)` (N3). The reason S4-9 above gives for calling this theoretical (Yama `ptrace_scope` 1, "the Ubuntu default") is
-  true on Ubuntu only: on this Debian 13 host (kernel 6.12.111) `kernel.yama.ptrace_scope` is 0 and `dev.tty.legacy_tiocsti` is 0
+  `ioctl(TIOCSTI)` (N3). The reason S4-9 above gives for calling this theoretical (Yama `ptrace_scope` 1, "the Ubuntu default") holds
+  where Yama is 1 or higher; on this Debian 13 host (kernel 6.12.111) `kernel.yama.ptrace_scope` is 0 and `dev.tty.legacy_tiocsti` is 0
   (both read in this stage; no ptrace or TIOCSTI test was run). The sandbox is defence in depth against our own process doing
   network I/O, not against another process of the same user; the docs have to say on which hosts that holds.
 
@@ -997,9 +997,10 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   below). README and PRIVACY.md say nothing about a URL.
 - Pages is not switched on (S9g): after Settings > Pages > Source = "GitHub Actions" (and a public repository on a Free plan) the
   first push to `master`, or "Run workflow", deploys `web/index.html`; the environment `github-pages` must allow `master`. `pages.yml`
-  names `master` only (`ci.yml` also names `main`).
+  names `master` only (`ci.yml` also names `main`). Do this before the first push of `pages.yml`, or its first runs fail in the
+  Actions tab.
 - N2 and N3 of the third review stay as documented limits (see the S9g stage): same-user ptrace and friends, and TIOCSTI, are not
-  filtered, and the Yama setting that made them theoretical is Ubuntu's, not Debian's.
+  filtered, and the Yama setting that made them theoretical is Ubuntu's default (1); this Debian host has 0.
 - Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
   it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage
   timed Tor syncs of one and of 30 days (see "Measured sync times").

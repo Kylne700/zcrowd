@@ -689,7 +689,7 @@ weighted: 1.0
 ```
 
 **The library.** `zcrowd-core` is the crate behind the command line. The five lines that score an amount are the example
-`crates/zcrowd-core/examples/five_lines.rs`, shown here as the file has them:
+`crates/zcrowd-core/examples/five_lines.rs`, shown here without its first line (a comment):
 
 ```rust
 use zcrowd_core::Kind;

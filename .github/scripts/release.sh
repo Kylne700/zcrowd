@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the release binary for one target, packs it and checks the archive for paths of the machine that built it (M9).
+# Builds the release binary for one target, packs it with the sample data and checks the archive for paths of the machine that built it (M9).
 # Run by .github/workflows/release.yml; also runnable by hand from the repository root:
 #   bash .github/scripts/release.sh <rust target> <version name>
 # Result: dist/zcrowd-<version name>-<target>.tar.gz (.zip for Windows targets).
@@ -86,8 +86,10 @@ main() {
   check_links "$bin" "$target"
 
   rm -rf dist
-  mkdir -p "dist/stage/$name" dist/check
+  mkdir -p "dist/stage/$name/fixtures" dist/check
   cp "$bin" LICENSE README.md "dist/stage/$name/"
+  # The quick start of the README (--data fixtures/flows-sample.ndjson) must find the sample in the unpacked folder.
+  cp fixtures/flows-sample.ndjson fixtures/flows-sample.meta.json "dist/stage/$name/fixtures/"
   check_clean dist/stage
 
   case $target in
@@ -104,8 +106,10 @@ main() {
       archive=$name.tar.gz
       ;;
   esac
-  # Look again at what a user will unpack, and make sure it is the binary that was just tested.
+  # Look again at what a user will unpack, and make sure it is the binary and the sample that were just tested.
   cmp "$bin" "dist/check/$name/zcrowd$ext"
+  cmp fixtures/flows-sample.ndjson "dist/check/$name/fixtures/flows-sample.ndjson"
+  cmp fixtures/flows-sample.meta.json "dist/check/$name/fixtures/flows-sample.meta.json"
   check_clean dist/check
   rm -rf dist/stage dist/check
   ls -l "dist/$archive"

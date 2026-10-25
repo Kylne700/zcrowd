@@ -1,9 +1,11 @@
 name: Release
 
-# A tag v* builds the binaries, writes SHA256SUMS and creates a DRAFT release. Nothing is published here: a person opens the
-# draft, reads it and publishes it.
+# A tag v* builds the binaries, writes SHA256SUMS, attests the build provenance of the archives and creates a DRAFT release. No
+# release is published here: a person opens the draft, reads it and publishes it.
 # "Run workflow" does the same without a tag. The archives and SHA256SUMS stay workflow artifacts; tick draft to also create
 # a draft release named after the tag field (that name is not an existing tag).
+# Only a run that creates a draft also attests the archives (signed with public Sigstore, stored with the repository, not a
+# release asset), so test runs leave no attestation; a download is checked with `gh attestation verify`.
 # No cache: a release is built from nothing, with `cargo build --locked`.
 
 on:
@@ -98,6 +100,10 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Fetch the archives
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -114,6 +120,13 @@ jobs:
           sha256sum -c SHA256SUMS
           cat SHA256SUMS
 
+      # One attestation with the three archives as its subjects (each by its SHA-256); SHA256SUMS itself is not a subject.
+      - name: Attest the build provenance of the archives
+        if: github.ref_type == 'tag' || inputs.draft
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/zcrowd-*
+
       - name: Keep SHA256SUMS
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -122,7 +135,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # The only job that can write to the repository, and it only creates a draft.
+  # The only job that can write the repository's contents (releases), and it only creates a draft.
   draft:
     name: draft release
     needs: sums
@@ -151,6 +164,8 @@ jobs:
             echo "Built from commit $GITHUB_SHA by $RUN_URL with Rust $RUST_VERSION and cargo build --locked."
             echo
             echo "Check a download against SHA256SUMS: sha256sum -c SHA256SUMS (Linux), shasum -a 256 -c SHA256SUMS (macOS), Get-FileHash (Windows)."
+            echo
+            echo "Check that an archive was built by this workflow: gh attestation verify <archive> -R $REPO (needs the GitHub CLI)."
           } > ../notes.md
           if [ "$FROM_TAG" = true ]; then pin=(--verify-tag); else pin=(--target "$GITHUB_SHA"); fi
           gh release create "$VERSION" --repo "$REPO" --draft --title "$VERSION" --notes-file ../notes.md "${pin[@]}" zcrowd-* SHA256SUMS

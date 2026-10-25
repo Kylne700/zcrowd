@@ -21,7 +21,7 @@ web page. It computes only what any chain observer can already compute, for your
 | Rust | 1.90 or newer (`rust-version` in `Cargo.toml`; `cargo +1.90.0 check --workspace --all-targets --locked` passes). The tests and the audit ran on 1.97.1, the version CI pins (the repository has no `rust-toolchain` file, so your own toolchain is used); the tests under 1.90 are NOT VERIFIED. A C compiler is needed (SQLite is bundled). |
 | First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, on a Linux desktop, crates already downloaded; a second run the same day, with other jobs using the machine (load average 4 before it started), took 101 s; a first build elsewhere also downloads the crates). |
 | Platform | Linux is the tested platform (140 tests, the audit and `tests/e2e.sh`, by hand and in CI). macOS (aarch64) and Windows (x86_64-msvc) were built and tested in CI only: 135 and 132 tests passed in [run 40171306113](https://github.com/Kylne700/zcrowd/actions/runs/40171306113) (jobs 121102516531 and 121102516515, commit `70d5187`). Neither was run by hand on a real Mac or Windows PC, and no `sync` ran on either (NOT VERIFIED, end of this file). Windows has no network cut. |
-| Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents (and the screenshot), 3 lines of `.github/workflows/ci.yml` (a macOS fix, section 14), the web page and a grammar fix of the page: the commit that adds the page's first box (`c34e02c`; the report's figures, section 13) changes `web/index.template.html`, the built `web/index.html` (its size and SHA-256, section 3.1) and 2 lines of `tests/e2e.sh`; with that box in place the tests, `tests/e2e.sh` with the audit, the parity test and the headless test (section 13) were run again and passed. The grammar fix makes the page say "1 earlier shield or move", "1 other shield or move" and "1 entry" (it said "shields and moves" and "entries" for a crowd of one); it changes 3 lines of `web/index.template.html`, the same 3 lines of the built `web/index.html` (its size and SHA-256, section 3.1) and 1 line of `web/test/headless.mjs` (the single match of 3.73 ZEC); with it in place the tests, `tests/e2e.sh` with the audit, the parity test and the headless test (section 13) were run again and passed. The CI runs named in this README are of `70d5187`, before that box, except runs 40231250867 and 40231250834, which are of `93a9206`, with that box and before the grammar fix, and runs 40238031649 and 40238031694, which are of `d576004`, with the grammar fix. |
+| Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents (and the screenshot), 3 lines of `.github/workflows/ci.yml` (a macOS fix, section 14), `.github/scripts/release.sh` and `.github/workflows/release.yml` (the archives also hold the sample and get a build provenance attestation, sections 11 and 14), the web page and a grammar fix of the page: the commit that adds the page's first box (`c34e02c`; the report's figures, section 13) changes `web/index.template.html`, the built `web/index.html` (its size and SHA-256, section 3.1) and 2 lines of `tests/e2e.sh`; with that box in place the tests, `tests/e2e.sh` with the audit, the parity test and the headless test (section 13) were run again and passed. The grammar fix makes the page say "1 earlier shield or move", "1 other shield or move" and "1 entry" (it said "shields and moves" and "entries" for a crowd of one); it changes 3 lines of `web/index.template.html`, the same 3 lines of the built `web/index.html` (its size and SHA-256, section 3.1) and 1 line of `web/test/headless.mjs` (the single match of 3.73 ZEC); with it in place the tests, `tests/e2e.sh` with the audit, the parity test and the headless test (section 13) were run again and passed. The CI runs named in this README are of `70d5187`, before that box, except runs 40231250867 and 40231250834, which are of `93a9206`, with that box and before the grammar fix, and runs 40238031649 and 40238031694, which are of `d576004`, with the grammar fix, and release run 40241042204, which is of `bfbdc31` (section 14). |
 | Data | `fixtures/flows-sample.ndjson`: 74,643 real mainnet events, blocks 3,493,237 to 3,529,525 (2026-09-23 08:32 UTC to 2026-10-25 00:05 UTC, 31.65 days). The quick start and every example below run on it without a network. |
 
 **What to run, per judging criterion.** The middle column is a command to run or a file to open; the right column is what it does not cover. No score is claimed. The `zcrowd` commands assume the build and the `PATH` of section 2. The full lists are section 11 and [NOT VERIFIED](#not-verified).
@@ -965,12 +965,22 @@ The web page and the release
 - **The page.** GitHub sees your IP address when you load it from GitHub Pages, as any website does, but never the amount.
   Browser extensions can read what you type. The strongest option is the command line tool, or the file opened offline in
   a private window with extensions off. It has no address input (`--to` is CLI only).
-- **Releases are unproven; CI has run.** Releases are drafts; this README gives no download instructions and makes no claim of
-  bit-for-bit reproducible builds. `ci.yml` and `pages.yml` ran green on GitHub (runs 40171306113 and 40171306059 on
-  `70d5187`, section 14); `release.yml` never ran. What was run by hand, once, on
-  Linux x86_64 with the final code: `.github/scripts/release.sh` built the release binary, started it on the sample,
-  found that it links glibc, libm and libgcc_s only (SQLite is built in), packed it and found no path of the build
-  machine in the archive (docs/PRIVACY.md, R1). The macOS and Windows archives were not built.
+- **Releases.** Build from source (section 2) is the first and recommended path; this README makes no claim of bit-for-bit
+  reproducible builds. `release.yml` builds archives for Linux x86_64, macOS aarch64 and Windows x86_64 in CI and only ever
+  drafts a release; a person publishes it. A published release on the
+  [Releases page](https://github.com/Kylne700/zcrowd/releases) lists the three archives that `release.yml` built in CI from the
+  commit its notes name, and `SHA256SUMS` (`sha256sum -c SHA256SUMS` checks a download; `shasum -a 256 -c SHA256SUMS` on
+  macOS). The three archives are also the subjects of one build provenance attestation, stored with this repository (it is not
+  a file on the release page): `gh attestation verify <archive> -R Kylne700/zcrowd` checks an archive against it and needs the
+  GitHub CLI. An archive holds `zcrowd` (`zcrowd.exe`), `LICENSE`, `README.md` and the sample
+  (`fixtures/flows-sample.ndjson` and `fixtures/flows-sample.meta.json`), so the `--data` path of the quick start in section 2
+  exists in the unpacked folder. The binaries are not code-signed or notarized: macOS may refuse to start one that a browser
+  downloaded until its quarantine flag is removed (`xattr -d com.apple.quarantine zcrowd`), and Windows SmartScreen may warn
+  (NOT VERIFIED: no real Mac or Windows machine was used). The results of a release run are in the
+  run that the release notes name, not in this README; the first run of `release.yml`, 40241042204, is described in
+  section 14. What was run by hand on Linux x86_64 with the final code: `.github/scripts/release.sh` built the release binary,
+  started it on the sample, found that it links glibc, libm and libgcc_s only (SQLite is built in), packed it and found no
+  path of the build machine in the archive (docs/PRIVACY.md, R1).
 - **The dependency tree is large.** The Tor client brings it to 525 crate versions; the name scan in audit P5 looks for
   analytics, telemetry and update-check crates by name, which is not a review of the Tor code. `deny.toml` ignores two
   advisories, each with its reason, both reached only through the Tor client (an unmaintained proc-macro, and a timing
@@ -1060,7 +1070,9 @@ dev-dependencies, for its tests only. SQLite is bundled, so a C compiler is need
 
 CI (`.github/workflows/ci.yml`) builds and tests on Linux, macOS and Windows, runs a sandbox job, the whole e2e and audit
 on Linux, the page in three browsers and `cargo deny`; `release.yml` builds archives for Linux x86_64, macOS aarch64 and
-Windows x86_64 and only ever drafts a release. `ci.yml` and `pages.yml` have run on GitHub; `release.yml` has not.
+Windows x86_64, attests their build provenance and only ever drafts a release (section 11). `ci.yml` and `pages.yml` have run
+on GitHub, and so has `release.yml` (run 40241042204, below, of the version before the sample was packed and the archives were
+attested).
 
 CI run [40171306113](https://github.com/Kylne700/zcrowd/actions/runs/40171306113) (push to `master`, commit `70d5187`,
 2026-10-25) passed in all 9 jobs:
@@ -1084,9 +1096,22 @@ The first run on all three systems (a manual dispatch, run 40157515838 on `dd7f9
 sandbox as a user sees it" of the macOS job; the other 8 jobs passed. macOS `script(1)` echoed `^D` into the output of the
 step; commit `a7cc89a` (3 lines of `ci.yml`) strips it, and the dispatch run 40158108612 on `a7cc89a` passed in all 9 jobs.
 The Pages run 40171306059 is described in section 13. Before they ran, the three workflow files were checked only by parsing them as
-YAML, and a script asserted the triggers, permissions, job layout and action pins of `pages.yml`; `release.yml` has had
-only that. All 18 `uses:` lines in them name a full commit SHA, and `cargo-deny` 0.20.2 is downloaded from its release
+YAML, and a script asserted the triggers, permissions, job layout and action pins of `pages.yml`; `release.yml` had only
+that. Now all 19 `uses:` lines in them name a full commit SHA, and `cargo-deny` 0.20.2 is downloaded from its release
 page and checked against a SHA-256 before it runs.
+
+Release run [40241042204](https://github.com/Kylne700/zcrowd/actions/runs/40241042204) (a manual dispatch of `release.yml` on
+`bfbdc31`, tag field `v0.1.0`, draft ticked, 2026-10-25) passed in all 5 jobs: the builds for `x86_64-unknown-linux-gnu`
+(`ubuntu-22.04`), `aarch64-apple-darwin` and `x86_64-pc-windows-msvc`, `SHA256SUMS` and the draft release. Each build job ran
+`.github/scripts/release.sh`: the check for paths of the build machine (docs/PRIVACY.md, R1) on the staged files and on the
+unpacked archive, the binary answering the sample check on its own platform, and the comparison of the unpacked binary with
+the one that was tested. The draft it created held the three archives and `SHA256SUMS`, and `sha256sum -c SHA256SUMS` passed
+on the downloads. The archives held `zcrowd` (`zcrowd.exe`), `LICENSE` and `README.md` and not the sample, so the `--data`
+path of the quick start in section 2 did not exist in an unpacked archive; that draft was not published. `release.sh` now also
+packs `fixtures/flows-sample.ndjson` and `fixtures/flows-sample.meta.json` and compares both with the repository's files after
+unpacking, and `release.yml` attests the build provenance of the archives (section 11); neither was in that run. The
+attestation step and the permissions of the `sums` job were checked by parsing the file and by a script that asserted the
+permissions of the workflow and of each job and that every `uses:` is pinned to a full commit SHA.
 
 Track: CORE & TOOLING. The library (`zcrowd-core`) and `--json` are for wallet and SDK authors. Roadmap, not built: a
 wallet-side hook that shows the verdict on the send screen.
@@ -1098,10 +1123,12 @@ This is the one list. Nothing here was run or seen; each line says what is missi
 Platforms and publishing
 
 - Windows and macOS on a real machine, and a `sync` on either (CI built and tested both, section 14, but it is offline on
-  purpose and ran no `sync`). On Windows also the Tor state directory default (`%LOCALAPPDATA%\zcrowd\tor`) and the stop
+  purpose and ran no `sync`), and whether Gatekeeper or SmartScreen stops a downloaded release binary (section 11). On Windows also the Tor state directory default (`%LOCALAPPDATA%\zcrowd\tor`) and the stop
   handler (`tests/stop.rs` is Unix-only; the Windows fallback compiled in job 121102516515 and was never run). A Linux
   aarch64 build.
-- GitHub: `release.yml` (including its draft step) has not run.
+- GitHub: a run of `release.yml` that packs the sample and attests the archives (both added after run 40241042204, section 14),
+  and `gh attestation verify` on one of those archives. This README records no such run; the run that builds a release is
+  named in its release notes.
 - The tests under Rust 1.90 (only `cargo check --workspace --all-targets --locked` was run on it; the tests ran on 1.97.1).
 - A real default Ubuntu 24.04 host on which the empty network namespace is refused: by hand that case was only simulated
   with `max_user_namespaces=0`; the CI runner of job 121102516415 (`apparmor_restrict_unprivileged_userns=1`) still gave

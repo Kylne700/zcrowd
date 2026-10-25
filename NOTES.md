@@ -197,7 +197,7 @@ and docs/PRIVACY.md was written down for the docs stage, not edited here.
 | M2 data format version | the meta has `version: 2`; `check`, `report` and `verify` refuse any other (or a meta that does not parse) | `a_meta_without_this_version_is_refused`, `check_and_report_refuse_data_without_this_format_version`, `sync_replaces_data_of_another_version_and_stores_the_format_version_and_skipped_counts` |
 | M5 `--to` with a Unified Address | its transparent receiver is checked; a note says a wallet normally pays the shielded one; a UA without a transparent receiver is refused with a reason | `a_unified_address_is_checked_through_its_transparent_receiver` (core and CLI, the CLI one also proves it is never printed back), `a_unified_address_without_a_transparent_receiver_says_it_does_not_leave_the_shielded_pools` |
 | M6 clock sanity | `check` warns when the clock is more than 3 hours behind or a year ahead of the newest block | `the_clock_is_wrong_beyond_three_hours_behind_or_a_year_ahead_of_the_newest_block`, `a_clock_far_off_the_chain_is_reported` |
-| a server that leaves one pool out | from NU6.3 on, more than 1000 blocks with data in some pool and none in another refuses the range; the consensus branch id of the tip must be the one expected at its height | `a_server_that_leaves_a_pool_out_is_refused_after_the_activation_of_nu6_3`, `blocks_before_the_activation_of_nu6_3_do_not_count_for_the_pool_check`, `the_branch_id_of_the_tip_must_be_the_one_expected_at_that_height` |
+| a server that leaves one pool out | `sync` compares the growth of each pool with the server's note commitment tree sizes at both ends of the range (any range, since the sync stage S9t); a server that gives no tree states falls back to: from NU6.3 on, more than 1000 blocks with data in some pool and none in another refuses the range; the consensus branch id of the tip must be the one expected at its height | `a_server_that_leaves_ironwood_out_of_its_blocks_is_refused_for_a_one_day_range`, `one_missing_commitment_is_enough_to_refuse_a_range`, `a_normal_one_day_range_agrees_with_the_tree_states_of_the_server`, `without_tree_states_a_pool_missing_from_a_one_day_range_is_refused`, `a_server_that_leaves_a_pool_out_is_refused_after_the_activation_of_nu6_3` (fallback), `blocks_before_the_activation_of_nu6_3_do_not_count_for_the_pool_check`, `the_branch_id_of_the_tip_must_be_the_one_expected_at_that_height` |
 | Q9 a first Tor start and a long sync looked like a hang | stderr says `starting Tor; the first run can take a minute`, then the block range, blocks done with a percent and the transactions fetched (heights and counts only) | `progress_prints_about_twenty_lines_for_any_size_and_ends_at_one_hundred`, `sync_reports_its_progress_on_stderr_with_heights_and_counts_only`, `tor_failure_is_loud_and_never_goes_direct` |
 
 The one change a test does not pin: the `TEX1` prefix guard in `decode::destination` (a base58 string lowercased fails its
@@ -227,10 +227,12 @@ Decisions worth a reviewer's eye:
   rule ("No new value may enter the Orchard pool": from NU6.3 activation on, for every transaction of every version, the
   encoded `valueBalanceOrchard` is nonnegative; value may still leave Orchard). So `--shield --pool orchard` is refused and
   an unshield out of Orchard gets a message when Orchard has no entry (S9d section, F5 and F6).
-- The pool check is a shortcut with two limits. It fires only when more than 1000 blocks hold data in some pool, so a
-  range of about a day or less is not protected (the 1-day live run had 150 Sapling, 64 Orchard and 783 Ironwood
-  blocks: at most 997 with any, which is below it). And Orchard activity is falling, so in the future even a long range
-  might hold no Orchard block and be refused; the comment in `ingest.rs` says when to revisit it.
+- The pool check compares each pool with the tree states of the server at both ends of the range (exact, any range; the
+  sync stage S9t). Only a server without tree states falls back to the shortcut: a pool with no data in more than 1000
+  blocks from NU6.3 on is refused; that rule does not protect a range of 1000 blocks or fewer, and Orchard activity is
+  falling (the comment in `ingest.rs` says when to revisit it). Before the sync stage this check was only the shortcut
+  (it fired only when more than 1000 blocks held data in some pool, so a range of about a day was not protected: the
+  1-day live run had 150 Sapling, 64 Orchard and 783 Ironwood blocks, at most 997 with any).
 
 ### Measured sync times (release build, 2026-10-24, server `zec.rocks`)
 
@@ -260,13 +262,31 @@ the two rates, NOT VERIFIED as one run). The numbers are from one occasion.
 
 Over Tor the speed varies a lot, between runs and inside one run: one-day runs went at 2.9, 5.0 and 10.4 transactions
 per second, the 30-day processes at 10 to 13, then 1.3, then 14 to 17; 2000 blocks took 16 to 85 s per request in the first
-30-day process (median 33 s) and about 26 s in the second. What sets the pace was not tested. Facts in the code that fit a
-cause that stays with one process: all requests of a run share one HTTP/2 connection (one Tor stream, one circuit), a
-request may wait 60 s per attempt (5 attempts), and `buffered(8)` in `resolve()` returns results in order, so one slow
-request holds back the seven behind it. Stopping the slow process and running the same command again recovered the
-pace (the second process above). The README's earlier "a one-day sync took 20 to 40 s over Tor" (nine runs, debug
-build) does not match these runs; the ranges and candidate counts of those runs are not recorded here (a day holds
-about 2100 candidates now).
+30-day process (median 33 s) and about 26 s in the second. The README's earlier "a one-day sync took 20 to 40 s over Tor"
+(nine runs, debug build) does not match these runs; the ranges and candidate counts of those runs are not recorded here (a
+day holds about 2100 candidates now). The sync stage (branch `sync`, S9t) measured what sets the pace:
+
+What sets the pace (sync stage, release builds, 2026-10-24, one day 3527704..3529000: 1297 blocks, 2298 candidate
+transactions, 55.8 MB of raw transactions; a new Tor state directory for every run). The rate is the number of requests on
+the wire divided by the time one answer takes, and that time is the circuit's: the mean answer took 0.49 to 1.36 s in the
+eight runs where every request was timed, and the same range ran at 4.6 to 16.3 transactions per second on one circuit
+(156 s to 578 s of sync time). Inside one run the first ~1400 candidates are small transactions (about 0.4 s each, 18 per
+second, 7.5 of the 8 requests in flight all the time); the last ~900 hold about 170 transactions of 100 KB and more (median
+205 KB, largest 542 KB), their latency rises to 2 s median and 5.3 s at most, and the rate falls to 8 to 10 per second. That
+slowdown comes at the same candidate in every run, so on one day it is the size of the transactions, not time.
+Four connections on four circuits (at most 8 requests in flight in all): a window of eight that kept its order waited for
+its slowest request and held only 6.0 to 6.7 requests on the wire (17 to 25 percent of the allowed requests idle). Fetching
+without the order (`resolve` in `ingest.rs`; the events are put back in candidate order) holds 7.8 to 8.0. Four circuits
+are not faster than one on average: three pairs started together ran at 16.3 / 14.0, 5.9 / 10.8 and 11.3 / 9.1 transactions
+per second (one circuit / four), means 11.2 and 11.3. The slowest of the three four-circuit runs was 9.1, of the
+three one-circuit runs 5.9 (that one had an answer that took 29 s); three pairs are not a test. Sync time of the product builds over Tor: 578 s and 156 s
+before, 330 s and 260 s with four connections and the ordered window, 247 s and 170 s with the unordered fetch. The spread
+of one build is larger than the difference between builds, so no gain on a one-day range is claimed. The events of all
+these Tor runs and of the direct run are identical (same SHA-256), so the Tor runs equal the `--no-tor` run line for line.
+A 16-day Tor sync (37,986 candidates, 416 MB of raw transactions; build before the unordered fetch) ran in one process in
+73 min 20 s, 8.6 transactions per second on average and between 7.6 and 11.5 in every window of 10 minutes; its events equal
+the 30-day file above on the same heights, line for line, and a `--no-tor` sync of the same range on the transactions that
+run saved wrote the same file (same SHA-256). A 30-day sync (75,606 candidates) at that rate takes about 2 h 25 min.
 
 ### Final run (review-fix stage, last code commit a29b5d3)
 
@@ -610,9 +630,9 @@ added the project's own private GitHub remote `origin`. The agents never push, a
 - Release-build behaviour: the release binary was built and ran the timed syncs of the review-fix stage; the tests and
   the e2e run use the debug profile only.
 - P2SH input-address detection beyond the t3 sources seen in the sample. Whether a lightwalletd server offers all three
-  pools: since the review-fix stage `sync` refuses a range in which, from NU6.3 on, more than 1000 blocks hold data in some
-  pool and none holds data in another. A range of about a day or less is below that and not protected, and a server
-  that leaves a pool out for only part of the range is not noticed.
+  pools: with tree states (the live server `zec.rocks` serves them) every range is checked and a pool left out for part
+  of the range is noticed. Open: a server that lies in both its blocks and its tree states; servers without tree states
+  (fallback only, see the pool check above).
 - The consensus side of the Orchard finding above is taken from the text of ZIP 258 (Final), not from node code: zebrad and
   zcashd were not read, and the sample holds no entry into Orchard to test the rule against (its 443 Orchard events are
   all unshields). The oldest Rust that builds the workspace
@@ -638,14 +658,23 @@ added the project's own private GitHub remote `origin`. The agents never push, a
 - Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
   it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage
   timed Tor syncs of one and of 30 days (see "Measured sync times").
-- A Tor sync can end on a stream error in the middle of the block crawl (seen once in several dozen requests: `Error:
-  block stream` / `Stream not connected`). `blocks()` in `source.rs` retries only the call that opens the stream and blocks
-  are not cached, so a re-run crawls them again (the transaction cache is kept). Not changed.
-- A long Tor sync can slow down for good (30 days: 10 to 13 per second for 20 minutes, then 1.3 per second for 35
-  minutes, while a fresh process beside it ran at 10.4). The percent progress lines went quiet for those 35 minutes.
-  Stopping it and running the same command again fixed it once. Not changed: several connections, unordered buffering
-  in `resolve()` (`ingest.rs:221`, `MAX_CONCURRENCY` is 8), a time-based progress line and a retry of a whole block range
-  are open design choices, each of which needs a test against the server's load limits.
+- A Tor sync that meets a stream error in the block crawl opens the stream again after the last block received
+  (`read_blocks` in `source.rs`: 5 failed attempts in a row, 20 in all, a doubling backoff from 0.5 s; a stream with no
+  block for 60 s counts as failed; the hash chain is checked across the seam, tests in `tests/ingest.rs`). Blocks are
+  not cached, so a sync that ends on those limits crawls again on the next run (the transaction cache is kept). Tested with
+  a fake stream; a real broken connection was not seen in the sync stage (NOT VERIFIED live).
+- A long Tor sync could slow down for good (30 days, above: one process fell from 11 to 1.3 transactions per second after
+  35 minutes, cause not found). Now: transactions go over 4 connections, each on a circuit of its own and each replaced
+  after 10 minutes (`Pool` in `source.rs`, tests in `tests/pool.rs`); the fetch no longer waits for its slowest request
+  (`resolve` in `ingest.rs`; with four circuits the old ordered window of eight left 17 to 25 percent of its requests
+  idle); a `sync:` line is printed whenever 40 s pass without one (checked every 10 s), so a slow crawl or fetch is silent
+  for about 50 s at most (Tor start-up has its own line and a 120 s limit); Ctrl-C and SIGTERM stop a sync with the saved data untouched, and the same command goes on from `tx/`
+  (`tests/stop.rs`). The 16-day run above ran at 7.6 to 11.5 transactions per second in every window of 10 minutes, with no slowdown like the
+  30-day process's, so the slowdown was not reproduced and it is NOT VERIFIED that the replacement after 10 minutes
+  cures it. Four circuits are not faster than one on average (three pairs, above). Not built: replacing a connection because its rate fell (a replacement by age is used instead; by
+  the numbers of this stage a scheduler that prefers the faster connection would add 5 to 7 percent at most), a retry of
+  a whole block range beyond the limits above, a shorter request limit (the Tor client library already sets 60 s per
+  request and an HTTP/2 keep-alive).
 - The sample goes stale: after 2026-10-24 about 15:05 UTC `check` on it prints stale-data warnings (the README says so).
 - `data/` (1.5 GB on disk, 67,977 raw transactions plus the events file, gitignored) from the 30-day sync is left in
   the working tree, and `target/debug/zcrowd` is a fresh build for the video agent.

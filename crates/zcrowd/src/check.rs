@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
 use zcrowd_core::Kind;
-use zcrowd_core::crowd::{AddrFinding, Crowd, DAY, Params, Verdict, address_check, has_entries, pools_for, score_pools, worse, worst};
+use zcrowd_core::crowd::{
+    AddrFinding, Crowd, DAY, Params, Verdict, address_check, has_entries, pools_for, score_pools, uncounted, worse, worst,
+};
 use zcrowd_core::decode::{Via, destination, hides_crossing};
 use zcrowd_core::model::{Event, Pool, coinbase_tag, fmt_utc, fmt_zec, load, parse_zec};
 use zcrowd_core::suggest::popular;
@@ -157,6 +159,13 @@ pub fn run(a: Args) -> Result<()> {
         user == Kind::Unshield && matches!(a.pool, PoolArg::Any | PoolArg::Orchard) && !has_entries(&events, Pool::Orchard, &p);
     let orchard_note = orchard_empty.then(|| ORCHARD_EMPTY.to_string());
 
+    // A Low-confidence shield or move (one transaction into more than one pool) is no entry, so the crowd above never counts it;
+    // when some lie in the windows, a NO MATCH or a small crowd can be wrong by that many (NOTES S9e, F8 h).
+    let low = uncounted(&events, user, zat, &p);
+    let low_note = (low > 0).then(|| {
+        format!("note: low-confidence shields or moves of about this amount: {low}. A transaction that goes into more than one pool at once is not counted in any crowd, so a NO MATCH or a small crowd can be wrong here")
+    });
+
     if a.json {
         let v = |x: Verdict| x.to_string();
         // `verdict` is the overall one, exactly as in the text output (the worse of amount and address)
@@ -166,7 +175,7 @@ pub fn run(a: Args) -> Result<()> {
             "other_pools_k": elsewhere, "skipped": meta.skipped,
             "data": {"first_h": cov.first_h, "last_h": cov.last_h, "first_t": cov.first_t, "last_t": cov.last_t, "events": events.len()},
             "stale_secs": stale_secs, "short_window": short_window, "not_covered": FOOTER,
-            "notes": notes.iter().chain(&after_end).chain(&orchard_note).collect::<Vec<_>>(),
+            "notes": notes.iter().chain(&after_end).chain(&orchard_note).chain(&low_note).collect::<Vec<_>>(),
             "amount_verdict": v(c.verdict), "address_verdict": addr.as_ref().map(|f| v(addr_verdict(f))),
             "matches": c.matches.iter().map(|e| &e.txid).collect::<Vec<_>>(),
             "suggestions": sugg.iter().map(|s| json!({"zat": s.zat, "k": s.k, "weighted": s.weighted, "verdict": v(s.verdict)})).collect::<Vec<_>>(),
@@ -247,7 +256,7 @@ pub fn run(a: Args) -> Result<()> {
             println!("amount: {} - {why}", c.verdict);
         }
     }
-    for l in after_end.iter().chain(&orchard_note) {
+    for l in after_end.iter().chain(&orchard_note).chain(&low_note) {
         println!("{l}");
     }
     if a.pool == PoolArg::Any {

@@ -31,9 +31,9 @@ function load(html, events) {
   vm.runInContext(scripts[0][1], ctx);
   const ev = (code) => vm.runInContext(code, ctx);
   const plain = (x) => JSON.parse(JSON.stringify(x)); // drop the other realm's prototypes
-  const [parse, check, missing, orchardEmpty, shortWindow] = [ev("parseZec"), ev("check"), ev("restsOnMissing"), ev("orchardEmpty"), ev("shortWindow")];
+  const [parse, check, missing, orchardEmpty, shortWindow, uncounted] = [ev("parseZec"), ev("check"), ev("restsOnMissing"), ev("orchardEmpty"), ev("shortWindow"), ev("uncounted")];
   const order = pageEntries(events).map((e) => e.txid); // the page keeps no txids, only each match's rank in this list
-  return { parse, check: (...a) => plain(check(...a)), missing, orchardEmpty, shortWindow, now: ev("NOW"), txids: (r) => r.matches.map((m) => order[m.rank]) };
+  return { parse, check: (...a) => plain(check(...a)), missing, orchardEmpty, shortWindow, uncounted, now: ev("NOW"), txids: (r) => r.matches.map((m) => order[m.rank]) };
 }
 
 function cli(data, mode, amount, c) {
@@ -51,6 +51,7 @@ const ties = { sample: 0, synthetic: 0 }; // comparisons whose listed matches in
 const missingLine = { yes: 0, no: 0 }; // comparisons with and without the "shields after ... are not counted" line
 const orchardLine = { yes: 0, no: 0 }; // comparisons with and without the "orchard has no entries at all" note (NOTES S9d F6)
 const shortLine = { yes: 0, no: 0 }; // comparisons with and without the "data covers less than the lookback" warning (NOTES S9d S4-1)
+const lowLine = { yes: 0, no: 0 }; // comparisons with and without the "low-confidence shields or moves of about this amount" note (NOTES S9e F8 h)
 function same(page, data, label, mode, amount, c = {}) {
   const want = cli(data, mode, amount, c);
   const settings = { lookback: c.look ?? 30, tol: c.tol ?? 0, fee: c.fee ?? 50000, now: page.now };
@@ -75,6 +76,10 @@ function same(page, data, label, mode, amount, c = {}) {
   // the warning that the data covers less than the lookback: the same comparison to the second, no slack
   assert.equal(page.shortWindow(settings), want.short_window, `${label}: short-window warning, ${mode} ${amount} ${JSON.stringify(c)}`);
   shortLine[want.short_window ? "yes" : "no"]++;
+  // the low-confidence shields and moves in the windows: the page counts the same ones the CLI names in its last note (NOTES S9e F8 h)
+  const lowNote = want.notes.map((n) => /^note: low-confidence shields or moves of about this amount: (\d+)\./.exec(n)).find(Boolean);
+  assert.equal(page.uncounted(mode, page.parse(amount), settings), lowNote ? Number(lowNote[1]) : 0, `${label}: low-confidence count, ${mode} ${amount} ${JSON.stringify(c)}`);
+  lowLine[lowNote ? "yes" : "no"]++;
   compared++;
   if (got.matches.some((m, i) => i > 0 && m.t === got.matches[i - 1].t)) ties[label === "synthetic" ? label : "sample"]++;
   return got;
@@ -166,6 +171,9 @@ for (let i = 0; i < 6; i++) synth.push(into("ironwood", "shield", zec(25), i));
 for (let i = 0; i < 5; i++) synth.push(into("ironwood", "move", zec(25), i));
 // no entries: a low-confidence event of any pool, a multi-pool one, an unshield (from the pool) and a Low-confidence move
 synth.push(into("mixed", "shield", zec(25), 1, { confidence: "low" }), into("ironwood", "shield", zec(25), 2, { confidence: "low" }), into("ironwood", "unshield", zec(25), 3), into("orchard", "move", zec(25), 4, { confidence: "low" }));
+// low-confidence shields and moves are told, not counted (NOTES S9e F8 h): one 20 days old (inside a lookback of 30, outside 14 and 7), and
+// one 0.0002 ZEC above 26 (inside the fee allowance of an unshield, outside the window of a shield)
+synth.push(ev("shield", zec(27), T - 20 * DAY, { confidence: "low" }), ev("move", zec(26.0002), T - 3600, { pool: "mixed", confidence: "low" }));
 // ties between pools: 26 ZEC entered each pool twice; 27 ZEC entered Orchard and Ironwood twice, Sapling never
 for (const pool of POOLS) for (let i = 0; i < 2; i++) synth.push(into(pool, "shield", zec(26), i));
 for (const pool of ["orchard", "ironwood"]) for (let i = 0; i < 2; i++) synth.push(into(pool, "move", zec(27), i));
@@ -260,5 +268,6 @@ assert.ok(ties.synthetic > 0, "no synthetic comparison listed two matches of the
 assert.ok(missingLine.yes > 0 && missingLine.no > 0, `the missing-shields line was only ever ${missingLine.yes ? "present" : "absent"}`);
 assert.ok(orchardLine.yes > 0 && orchardLine.no > 0, `the empty-Orchard note was only ever ${orchardLine.yes ? "present" : "absent"}`);
 assert.ok(shortLine.yes > 0 && shortLine.no > 0, `the short-window warning was only ever ${shortLine.yes ? "present" : "absent"}`);
+assert.ok(lowLine.yes > 0 && lowLine.no > 0, `the low-confidence note was only ever ${lowLine.yes ? "present" : "absent"}`);
 
 console.log(`PARITY OK: ${compared} JS-vs-Rust comparisons (${amounts} sample amounts, ${invalid.length} rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (${ties.sample} sample and ${ties.synthetic} synthetic comparisons with a time tie)`);

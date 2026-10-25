@@ -15,11 +15,19 @@ export function pageEntries(events) {
   return events.filter((e) => (e.kind === "shield" || e.kind === "move") && e.confidence === "high" && POOLS.includes(e.pool)).sort((a, b) => b.t - a.t || cmp(a.txid, b.txid));
 }
 
-// Only what the scoring reads: time, amount and pool of each entry, in that order. No txids, no addresses.
+// The low-confidence shields and moves (one transaction into more than one pool): no entry of any pool, so the page never counts
+// them in a crowd, only says how many lie in the windows of a check (crowd.rs `uncounted`, NOTES S9e F8 h). Time and amount.
+export function pageLow(events) {
+  return events.filter((e) => (e.kind === "shield" || e.kind === "move") && e.confidence === "low").map((e) => [e.t, e.zat]);
+}
+
+// Only what the scoring reads: time, amount and pool of each entry, in that order, and time and amount of each low-confidence one.
+// No txids, no addresses.
 export function pageData(events, cov) {
   const s = pageEntries(events).map((e) => [e.t, e.zat, POOLS.indexOf(e.pool)]);
-  for (const [t, z] of s) if (!Number.isSafeInteger(t) || !Number.isSafeInteger(z) || z <= 0) throw new Error(`not a safe integer: ${t} ${z}`);
-  return { cov, s };
+  const low = pageLow(events);
+  for (const [t, z] of [...s, ...low]) if (!Number.isSafeInteger(t) || !Number.isSafeInteger(z) || z <= 0) throw new Error(`not a safe integer: ${t} ${z}`);
+  return { cov, s, low };
 }
 
 export function render(template, data) {
@@ -31,5 +39,5 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(proces
   const events = read("../fixtures/flows-sample.ndjson").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const data = pageData(events, JSON.parse(read("../fixtures/flows-sample.meta.json")));
   fs.writeFileSync(at("index.html"), render(read("index.template.html"), data));
-  console.log(`web/index.html: ${data.s.length} entries, ${fs.statSync(at("index.html")).size} bytes`);
+  console.log(`web/index.html: ${data.s.length} entries, ${data.low.length} low-confidence, ${fs.statSync(at("index.html")).size} bytes`);
 }

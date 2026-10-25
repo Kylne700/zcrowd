@@ -480,6 +480,59 @@ fn an_empty_orchard_crowd_says_why_and_how_to_reach_further_back() {
     assert_eq!(said(&out, &j), (1, true), "{out}");
 }
 
+// NOTES S9e, F8 h: a multi-pool shield or move is Low confidence and no entry of any pool, so the crowd never counts it. When some
+// lie in the lookback and amount windows of a check, a NO MATCH or a small crowd can be wrong, and the check says how many.
+#[test]
+fn low_confidence_shields_in_the_window_are_told_and_never_counted() {
+    let key = "note: low-confidence shields or moves of about this amount: ";
+    let low = |l: String| l.replace(r#""confidence":"high""#, r#""confidence":"low""#);
+    let aged = |l: String, i: u64, days: u64| l.replace(&format!("\"t\":{}", T - 100 * i), &format!("\"t\":{}", T - days * 86_400));
+    let busy: Vec<String> = (1..=3).map(|i| line_in("shield", "sapling", 100_000_000, i, "")).collect();
+    let mut v = busy.clone();
+    v.push(low(line_in("shield", "mixed", 100_000_000, 4, ""))); // in both windows
+    v.push(low(line_in("move", "mixed", 100_020_000, 5, ""))); // in the window of an unshield only (its fee allowance)
+    v.push(low(line_in("unshield", "mixed", 100_000_000, 6, ""))); // an unshield is never an entry
+    v.push(aged(low(line_in("shield", "mixed", 100_000_000, 7, "")), 7, 20)); // 20 days old: inside a lookback of 30, outside 7
+    v.push(low(line_in("shield", "mixed", 200_000_000, 8, ""))); // another amount
+    v.push(aged(low(line_in("shield", "mixed", 100_000_000, 9, "")), 9, 40)); // before every lookback of this test
+    let with = data_file("cli-low-window.ndjson", &v);
+    // the same data without the shields and moves that could matter: nothing to say
+    let none = data_file("cli-low-none.ndjson", &[busy, vec![v[5].clone(), v[7].clone(), v[8].clone()]].concat());
+    // what a check says about them (text and JSON must agree, the text puts it after the verdict, the JSON last), and the crowd
+    let said = |f: &std::path::Path, mode: &str, extra: &[&str]| -> (Option<u64>, u64) {
+        let args = [&["check", mode, "-", "--data", f.to_str().unwrap()][..], extra].concat();
+        let (ok, out, err) = run(&args, Some("1\n"));
+        assert!(ok, "{err}");
+        let (ok, json, err) = run(&[&args[..], &["--json"]].concat(), Some("1\n"));
+        assert!(ok, "{err}");
+        let j: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let last = j["notes"].as_array().unwrap().last().and_then(|n| n.as_str()).unwrap_or("").to_string();
+        let lines: Vec<&str> = out.lines().collect();
+        let told = lines.iter().position(|l| l.starts_with(key));
+        assert_eq!(told.is_some(), last.starts_with(key), "{out}\n{last}");
+        let k = j["k"].as_u64().unwrap();
+        let Some(at) = told else { return (None, k) };
+        assert_eq!(lines[at], last);
+        assert!(at > lines.iter().position(|l| l.starts_with("verdict:")).unwrap(), "after the verdict: {out}");
+        assert_eq!(lines.iter().filter(|l| l.starts_with(key)).count(), 1, "{out}");
+        (Some(lines[at][key.len()..].split('.').next().unwrap().parse().unwrap()), k)
+    };
+    // the crowd is the three High-confidence shields into Sapling whatever the note says
+    let sapling = ["--pool", "sapling"];
+    assert_eq!(said(&with, "--unshield", &sapling), (Some(3), 3));
+    assert_eq!(said(&with, "--shield", &sapling), (Some(2), 3));
+    assert_eq!(said(&with, "--unshield", &["--pool", "sapling", "--lookback-days", "7"]), (Some(2), 3));
+    assert_eq!(said(&with, "--shield", &["--pool", "sapling", "--lookback-days", "7"]), (Some(1), 3));
+    assert_eq!(said(&with, "--unshield", &["--pool", "ironwood"]), (Some(3), 0), "whatever the pool: they could be in any of them");
+    assert_eq!(
+        said(&with, "--unshield", &["--pool", "sapling", "--tolerance-zat", "100000000"]),
+        (Some(4), 3),
+        "a wider window finds the other amount"
+    );
+    assert_eq!(said(&none, "--unshield", &sapling), (None, 3));
+    assert_eq!(said(&none, "--shield", &sapling), (None, 3));
+}
+
 // The process cuts its own network. A listener on loopback is reachable from this process but not from the probe once it
 // is in the sandbox. On Linux the seccomp layer answers first (the socket itself is refused: "Operation not permitted"; the
 // empty namespace alone would say "Network is unreachable"); on macOS the no-network profile. Windows has no sandbox.

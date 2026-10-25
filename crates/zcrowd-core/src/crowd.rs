@@ -59,13 +59,23 @@ pub struct Crowd {
 /// An entry into `pool`: a High-confidence shield (a shielded coinbase included) or move whose pool is
 /// `pool`, inside the lookback window and the amount window. Low-confidence multi-pool events are never entries.
 pub(crate) fn in_scope(e: &Event, user: Kind, pool: Pool, zat: u64, p: &Params) -> bool {
+    e.pool == pool && e.confidence == Confidence::High && in_windows(e, user, zat, p)
+}
+
+/// A shield or move inside the lookback window and the amount window, whatever its pool and confidence.
+fn in_windows(e: &Event, user: Kind, zat: u64, p: &Params) -> bool {
     let (lo, hi) = bounds(user, zat, p);
     matches!(e.kind, Kind::Shield | Kind::Move)
-        && e.pool == pool
-        && e.confidence == Confidence::High
         && e.t <= p.now
         && e.t >= p.now.saturating_sub(p.lookback_days.saturating_mul(DAY))
         && (lo..=hi).contains(&e.zat)
+}
+
+/// How many Low-confidence shields and moves (one transaction into more than one pool) lie in the windows of a check. They
+/// are no entries of any pool, so a NO MATCH or a small crowd can be wrong by this many (NOTES S9e, F8 h). Unshields are never
+/// entries, so they are not asked about.
+pub fn uncounted(events: &[Event], user: Kind, zat: u64, p: &Params) -> usize {
+    events.iter().filter(|e| e.confidence == Confidence::Low && in_windows(e, user, zat, p)).count()
 }
 
 /// Amount window of shields that can be tied to `zat`.
@@ -408,6 +418,28 @@ mod tests {
         assert!(by_pool(&evs, Kind::Shield, X).iter().all(|c| c.1 == 0));
         assert!(matches!(address_check(&evs, "t1src", NOW), AddrFinding::ShieldSource { .. }));
         assert!(matches!(address_check(&evs, "t1dst", NOW), AddrFinding::UsedAsDestination { n: 1, .. }));
+    }
+
+    // NOTES S9e, F8 h: a Low-confidence shield or move is no entry, so a check cannot count it, but it says how many there are
+    // in the same windows (the lookback, and the amount window of the kind of check).
+    #[test]
+    fn low_confidence_entries_in_both_windows_are_counted_apart_and_never_in_a_crowd() {
+        let low = |kind, zat, t| Event { confidence: Confidence::Low, ..ev_in(kind, Pool::Mixed, zat, t) };
+        let evs = vec![
+            low(Kind::Shield, X, NOW - 10),
+            low(Kind::Move, X + 20_000, NOW - 10),    // inside the fee allowance of an unshield only
+            low(Kind::Unshield, X, NOW - 10),         // never an entry, whatever its confidence
+            low(Kind::Shield, X, NOW - 31 * DAY),     // before the lookback
+            low(Kind::Shield, X, NOW + 1),            // after the end of the data
+            low(Kind::Shield, X + 100_000, NOW - 10), // outside the amount window of a check with no slack
+            ev_in(Kind::Shield, Pool::Sapling, X, NOW - 10), // a High-confidence entry: in the crowd, not in this count
+        ];
+        assert_eq!(uncounted(&evs, Kind::Unshield, X, &p(0)), 2);
+        assert_eq!(uncounted(&evs, Kind::Shield, X, &p(0)), 1);
+        assert_eq!(uncounted(&evs, Kind::Unshield, X, &p(100_000)), 3);
+        assert_eq!(uncounted(&evs, Kind::Unshield, 5 * X, &p(0)), 0);
+        assert_eq!(count(&evs, Kind::Unshield, X, &p(0)).0, 1, "only the High-confidence shield is in the crowd");
+        assert_eq!(uncounted(&evs[6..], Kind::Unshield, X, &p(0)), 0, "High-confidence entries are not counted apart");
     }
 
     // NOTES S9d F5: a shield cannot go into Orchard (ZIP 258), so shield mode scores Sapling and Ironwood only; an unshield

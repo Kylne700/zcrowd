@@ -117,6 +117,8 @@ const fmtAge = (s) => (s >= 2 * DAY ? (s / DAY).toFixed(1) + " days" : (s / 3600
 // DATA.s = [[unix time, zatoshi, pool index]] of every high-confidence entry into a shielded pool in the sample: a shield
 // (transparent in, shielded out) or a move from another pool. Pool index: 0 sapling, 1 orchard, 2 ironwood.
 // web/build.mjs sorts it newest first, ties by txid (as crowd.rs does); the position in it is the rank that orders the matches.
+// DATA.low = [[unix time, zatoshi]] of every low-confidence shield or move (one transaction into more than one pool). They are no entry of
+// any pool and never in a crowd; the page only says how many lie in the windows of a check (crowd.rs `uncounted`, NOTES S9e F8 h).
 const POOLS = ["sapling", "orchard", "ironwood"], ENTRIES = DATA.s.map(([t, z, pool], rank) => [t, z, pool, rank]), NOW = DATA.cov.last_t;
 // sorted by amount, so `count` looks only at the entries inside the amount window (a month of Ironwood is 25,000 entries)
 const BY_POOL = POOLS.map((_, i) => ENTRIES.filter((e) => e[2] === i).sort((a, b) => a[1] - b[1]));
@@ -189,6 +191,7 @@ const restsOnMissing = (r, pool = "any") => (pool === "any" ? r.pools : [r]).som
 // entry at all inside the lookback window, an unshield out of Orchard was shielded before it and a NO MATCH for Orchard says nothing.
 // Said whenever Orchard is judged (pool Orchard, or Not sure), never for a shield.
 const orchardEmpty = (mode, pool, p) => mode === "unshield" && (pool === "any" || pool === "orchard") && !BY_POOL[1].some(([t]) => t <= p.now && t >= Math.max(p.now - p.lookback * DAY, 0));
+const uncounted = (mode, zat, p) => DATA.low.filter(([t, z]) => inScope(mode, zat, p, t, z)).length;
 // check.rs `short_window`: the sample covers less time than the lookback (no slack: NOTES S9d S4-1).
 const shortWindow = (p) => DATA.cov.last_t - DATA.cov.first_t < p.lookback * DAY;
 const ORCHARD_EMPTY = "Note: Orchard has no entries at all in the lookback window of this sample, and none can arrive since NU6.3 (ZIP 258). An Orchard note was shielded before the window, so NO MATCH for Orchard says nothing about it: use the command line tool (sync --days N, then check --lookback-days N) to reach back to your shield.";
@@ -248,6 +251,8 @@ if (typeof document !== "undefined") {
     if (r.odd_amount) notes.push("Note: the exact amount is easy to recognise later, e.g. at an exchange; round amounts blend in.");
     if (restsOnMissing(r, pool)) notes.push("Note: shields after " + fmtUtc(c.last_t) + " (last synced block) are not counted.");
     if (orchardEmpty(mode, pool, p)) notes.push(ORCHARD_EMPTY);
+    const low = uncounted(mode, zat, p);
+    if (low > 0) notes.push("Note: low-confidence shields or moves of about this amount: " + low + ". A transaction that goes into more than one pool at once is not counted in any crowd, so a NO MATCH or a small crowd can be wrong here.");
     if (shortWindow(p)) notes.push("Warning: the sample covers " + fmtAge(c.last_t - c.first_t) + " but the lookback is " + p.lookback + " days: an entry of about this amount before " + fmtUtc(c.first_t) + " is not counted.");
     put($("note"), notes.join(" "));
     $("matches").replaceChildren(); $("sugg").replaceChildren();

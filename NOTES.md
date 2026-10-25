@@ -779,7 +779,7 @@ final-run numbers below are new.
   permissions, job layout and pins. **It has not run:** a person must set Settings > Pages > Source to "GitHub Actions" once (a
   Free plan also needs a public repository), and the environment `github-pages` must allow `master`; until then the `deploy` job
   is expected to fail on every push, so switch Pages on before the first push of this workflow. NOT VERIFIED.
-- **Left as they are: N2 and N3 of the third review (documented limits, no code change).** The seccomp filter does not stop the
+- **Left as they are: N2 and N3 of the third review (limits the docs must state, no code change).** The seccomp filter does not stop the
   same-user routes `ptrace`, `process_vm_readv`/`process_vm_writev`, `pidfd_open`/`pidfd_getfd` and `/proc/<pid>/mem` (N2), nor
   `ioctl(TIOCSTI)` (N3). The reason S4-9 above gives for calling this theoretical (Yama `ptrace_scope` 1, "the Ubuntu default") holds
   where Yama is 1 or higher; on this Debian 13 host (kernel 6.12.111) `kernel.yama.ptrace_scope` is 0 and `dev.tty.legacy_tiocsti` is 0
@@ -790,7 +790,7 @@ final-run numbers below are new.
 
 The code is that of 2ed0a4f and the workflow file of d2f6ea9. The one commit after them, 824e651, rewords a comment in `check.rs`;
 after it `cargo fmt --check`, a cold `cargo clippy`, `cargo test` (twice), the 1.90 check and `bash tests/e2e.sh` ran again (second
-list), and the commit after that changes NOTES.md only. 2026-10-25, debug profile, load average 1 to 4,
+list), and the commits after that change NOTES.md only. 2026-10-25, debug profile, load average 0.5 to 4,
 `PLAYWRIGHT_CORE=<playwright-core dir>`, one command after the other, `/` had 16 to 20 GB and `/tmp` 16 GB free throughout (the
 stop line was 3 GB). The sample was already more than 2 h old, so every `check` on it printed the stale-data warning. Every command
 ended with exit 0.
@@ -999,7 +999,7 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   first push to `master`, or "Run workflow", deploys `web/index.html`; the environment `github-pages` must allow `master`. `pages.yml`
   names `master` only (`ci.yml` also names `main`). Do this before the first push of `pages.yml`, or its first runs fail in the
   Actions tab.
-- N2 and N3 of the third review stay as documented limits (see the S9g stage): same-user ptrace and friends, and TIOCSTI, are not
+- N2 and N3 of the third review stay as limits the docs must state (see the S9g stage): same-user ptrace and friends, and TIOCSTI, are not
   filtered, and the Yama setting that made them theoretical is Ubuntu's default (1); this Debian host has 0.
 - Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
   it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage

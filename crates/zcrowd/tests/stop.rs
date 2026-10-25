@@ -1,5 +1,8 @@
 //! A sync that is told to stop (Ctrl-C, or the terminate signal of the system) leaves the data it had whole, and the next
-//! sync goes on from the transactions already fetched.
+//! sync goes on from the transactions already fetched. Unix only: it sends real signals with `libc::kill`, which Windows
+//! does not have (there the non-Unix `stop_signal` of sync.rs handles Ctrl-C and no test sends it).
+#![cfg(unix)]
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

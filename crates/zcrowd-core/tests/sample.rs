@@ -101,7 +101,7 @@ fn shielded_coinbase_entries_in_the_sample_are_counted() {
     }
 }
 
-// The README says nothing entered Orchard in the sample (30 days, 2026-09-24..2026-10-24): every Orchard unshield check is
+// The README says nothing entered Orchard in the sample (31.65 days, 2026-09-23..2026-10-25): every Orchard unshield check is
 // NO MATCH there. If a newer sample ever has Orchard entries, this fails and the README sentence must change.
 #[test]
 fn nothing_entered_orchard_in_the_sample() {

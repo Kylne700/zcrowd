@@ -28,7 +28,7 @@ web page. It computes only what any chain observer can already compute, for your
 
 | Criterion | Run or open | What remains |
 |---|---|---|
-| Privacy | `sha256sum web/index.html` (compare with section 3.1)<br>`bash tests/audit.sh` (one check per claim of `docs/PRIVACY.md`: 21 `ok` lines offline, 22 with the browser test of section 12)<br>`BROWSERS=chromium,firefox,webkit node web/test/headless.mjs` (0 requests while typing; setup in section 12) | Opened from GitHub Pages the page shows GitHub your IP address, and a browser extension can read what you type; real Safari is NOT VERIFIED. `sync` is the only command that uses the network: over Tor by default, and the server still sees the block range you ask for (section 11). The live Tor leak check of the audit runs only with `LIVE=1`. |
+| Privacy | `sha256sum web/index.html` (compare with section 3.1)<br>`bash tests/audit.sh` (the checks of P1 to P11 and T1, T2, T5, T7 in `docs/PRIVACY.md`: 21 `ok` lines offline, 22 with the browser test of section 12)<br>`BROWSERS=chromium,firefox,webkit node web/test/headless.mjs` (0 requests while typing; setup in section 12) | Opened from GitHub Pages the page shows GitHub your IP address, and a browser extension can read what you type; real Safari is NOT VERIFIED. `sync` is the only command that uses the network: over Tor by default, and the server still sees the block range you ask for (section 11). The live Tor leak check of the audit runs only with `LIVE=1`. |
 | Usefulness | the [live page](https://kylne700.github.io/zcrowd/)<br>`printf '1.0\n' \| zcrowd check --unshield - --data fixtures/flows-sample.ndjson` (section 2, no network)<br>`zcrowd report --data fixtures/flows-sample.ndjson` (the figures of section 1) | No wallet hook yet (roadmap, section 14): you run it before you send. Fresh data over Tor is slow: one day took 156 s to 866 s, a cold 30 days 2 h 25 min on an earlier build (section 4). The page and the quick start run on a frozen sample. |
 | Execution | `bash tests/e2e.sh` (formatting, lints, 140 tests, the command line on the fixtures, then the audit)<br>`cargo build -p zcrowd && node web/test/parity.mjs` (the page against the Rust scoring on 1,008 cases)<br>[CI run 40231250867](https://github.com/Kylne700/zcrowd/actions/runs/40231250867) (9 jobs on Linux, macOS and Windows, on `93a9206`, with the page's first box) | Linux is the tested platform. macOS and Windows ran in CI only, on no real machine, and ran no `sync`. The tests under Rust 1.90 are NOT VERIFIED. |
 | Originality | `git log --max-parents=0 --format='%h %aI %s'` (the root commit, below)<br>section 10: what is credited and what differs<br>`cargo run -q --release -p zcrowd-core --example five_lines` (the library, section 7)<br>the `--to` example of section 6 (address reuse) | The idea of matching amounts is not new: section 10 credits Quesnelle (2017) and Kappos et al. (2018). |
@@ -204,7 +204,7 @@ Connecting to 'https://example.com/' violates the following Content Security Pol
 Fetch API cannot load https://example.com/. Refused to connect because it violates the document's Content Security Policy.
 ```
 
-### 3.2 The offline audit: every claim, one check each
+### 3.2 The offline audit: P1 to P11 and T1, T2, T5, T7
 
 ```
 bash tests/audit.sh
@@ -787,7 +787,7 @@ sees a Tor exit relay instead of your IP address.
   accepted and changes nothing.
 - **Four circuits.** Over Tor `sync` keeps 4 connections, each on its own Tor circuit and replaced after 10 minutes, with at
   most `--concurrency` requests in flight. Four and ten minutes are guesses that were not tuned, and up to four exit
-  relays now see one sync instead of one. The events written are byte-identical to a `--no-tor` sync of the same
+  relays see one sync. The events written are byte-identical to a `--no-tor` sync of the same
   range (T6; section 4).
 - **Tor state** lives in `$XDG_CACHE_HOME/zcrowd/tor`, else `~/.cache/zcrowd/tor` (`--tor-dir` changes it), outside the
   repository. It holds only what Tor keeps itself: the public relay directory and guard state, about 39 MB, downloaded
@@ -982,7 +982,7 @@ The web page and the release
 
 ```
 bash tests/e2e.sh               # fmt, clippy -D warnings, all tests, the CLI on the fixtures, then the audit; prints E2E OK
-bash tests/audit.sh             # every privacy claim, one check each (docs/PRIVACY.md); prints AUDIT OK
+bash tests/audit.sh             # the checks of P1 to P11 and T1, T2, T5, T7 (docs/PRIVACY.md); prints AUDIT OK
 LIVE=1 bash tests/audit.sh      # also the live Tor leak check (real network, a C compiler)
 ```
 
@@ -992,7 +992,7 @@ LIVE=1 bash tests/audit.sh      # also the live Tor leak check (real network, a 
   tests run real fixture transactions (shield, unshield, shield with transparent change, Ironwood-only, a shielded
   coinbase, a move, unshields that leave two or three pools at once, transactions that cross nothing). The ingest tests
   use a fake server that lies in the ways of section 9. The sample tests decode the 20 explorer-checked events.
-- `tests/audit.sh` runs one check per claim of `docs/PRIVACY.md`. Offline it took about 100 s on a warm build directory
+- `tests/audit.sh` runs the checks of P1 to P11 and T1, T2, T5, T7 of `docs/PRIVACY.md` (T3, T4 and T6 with `LIVE=1`); the other claims name their own checks on that page. Offline it took about 100 s on a warm build directory
   and 144 s on a cold one without the headless test (167 s in a second run, in a fresh clone). `tests/e2e.sh` took 123 to 129 s offline. With `LIVE=1` (the real Tor
   sync) the audit took 236 s and `tests/e2e.sh` 470 s. All on 2026-10-25; the `LIVE=1` runs were made on `d2f6ea9`, which
   differs from `dd7f9ee` by one comment in `check.rs` and by `NOTES.md`.
@@ -1053,7 +1053,7 @@ Rust 2024 edition (1.90 or newer), `zcash_client_backend` (the lightwalletd prot
 Tor client: the tree went from 248 to 525 crate versions), `zcash_primitives`, `zcash_transparent` and `zcash_address`
 (transactions, ids, addresses), `tonic` with webpki roots (gRPC over TLS), `tokio`, `clap`, `serde_json`, `anyhow`,
 `rpassword` and `libc`; the command-line crate also lists `zcash_address` and `zcash_protocol` as
-dev-dependencies, for its tests only. SQLite is bundled, so a C compiler is needed. `Cargo.lock` is committed. MIT, see `LICENSE`.
+dev-dependencies, for its tests only. SQLite is bundled, so a C compiler is needed. `Cargo.lock` is committed. MIT, see `LICENSE`. `NOTES.md` is the build log of the stages S1 to S9g, with the labels that comments in the code cite (for example "NOTES S9d F6"); it is history, and what is true now is in this README and `docs/PRIVACY.md`.
 
 CI (`.github/workflows/ci.yml`) builds and tests on Linux, macOS and Windows, runs a sandbox job, the whole e2e and audit
 on Linux, the page in three browsers and `cargo deny`; `release.yml` builds archives for Linux x86_64, macOS aarch64 and
@@ -1072,6 +1072,8 @@ CI run [40171306113](https://github.com/Kylne700/zcrowd/actions/runs/40171306113
 - the page in headless chromium 156.0.8078.4 (job 121102516425), firefox 157.0 (121102516555) and webkit 27.2
   (121102516500): `HEADLESS OK` in each.
 - `cargo deny`, job 121102516542: advisories, bans, licenses and sources ok.
+
+CI run [40231250867](https://github.com/Kylne700/zcrowd/actions/runs/40231250867) (push to `master`, commit `93a9206`, the page with its first box, 2026-10-25) also passed in all 9 jobs, the page in chromium, firefox and webkit among them.
 
 The first run on all three systems (a manual dispatch, run 40157515838 on `dd7f9ee`) failed in one step, "The macOS
 sandbox as a user sees it" of the macOS job; the other 8 jobs passed. macOS `script(1)` echoed `^D` into the output of the

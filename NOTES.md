@@ -1,7 +1,7 @@
-# zcrowd build notes (for the lead and the reviewers)
+# zcrowd build notes
 
 The design and privacy specs these notes followed are not in this repository; what they require is in `docs/PRIVACY.md` and checked by `tests/audit.sh`.
-Everything below was run on this machine on 2026-10-24. Lines marked "recorded" were printed during the named stage and
+Everything below was run on one Linux desktop, stage by stage, on 2026-10-24 and 2026-10-25. The stage sections and the list of deviations are kept as they were written, so a statement such as "no CI run exists" or "has never run on GitHub" was true at that stage (three README section numbers in them were corrected afterwards); this paragraph, the title and the section "Open problems and hand-over" were brought up to date after the workflows had run. What is true now is in README sections 13 and 14, its NOT VERIFIED list and `docs/PRIVACY.md`. "The lead" is the coordinating agent of the AI agent team named in the README (row "AI disclosure"), and "the agents" are the sessions it ran. Lines marked "recorded" were printed during the named stage and
 not re-run later. S1..S4b are history: they come from the first, Ironwood-blind sample (6,227 events), so their counts
 (events, `PARITY OK: 160`, crowd sizes) are not today's. Today's numbers are in "Ironwood stage" and in "Final run",
 which is the output of `bash tests/e2e.sh` with LIVE=1 and PLAYWRIGHT_CORE set.
@@ -940,8 +940,8 @@ added the project's own private GitHub remote `origin`. The agents never push, a
     only entries into pools (shields and moves, no unshields), so it cannot show a pair either.
 22. README wording: "about 2.5 minutes cold" was removed (never measured). The measured 30-day sync with all three pools
     took 2,048 s direct (`--no-tor`; 61,750 transactions fetched, 6,227 already cached). `sync` uses the first default server that answers; each server it
-    tries sees your IP (README section 7, docs/PRIVACY.md), it is not "one server".
-23. Limit added (README section 8, docs/PRIVACY.md): the block hash chain is checked inside one `sync` run. When a later
+    tries sees your IP (README section 8, docs/PRIVACY.md), it is not "one server".
+23. Limit added (README section 11, docs/PRIVACY.md): the block hash chain is checked inside one `sync` run. When a later
     run extends older data, the link between the two runs is not checked (block hashes are not stored), so a different
     server on a later run is not noticed.
 24. The pool semantics of the spec (A11) were changed by the S9d stage, on the strength of ZIP 258 (Final: from NU6.3 on no new
@@ -953,6 +953,8 @@ added the project's own private GitHub remote `origin`. The agents never push, a
     line, an address that is still open under `--to`: see the code freeze stage above.
 
 ## NOT VERIFIED
+
+Written during the build stages, before the workflows had run on GitHub: the statements below that "no run exists", that `pages.yml` "has never run on GitHub" and that the page stays unchecked "until Pages is switched on" were true then. Since then CI and Pages have run (README sections 13 and 14); the current list is the section "NOT VERIFIED" at the end of the README.
 
 - `sync` over Tor on macOS and Windows, on networks that block Tor, and from servers other than `zec.rocks` (the first
   connection to another host through a freshly started Tor timed out at the exit once); the cause of one hang in an
@@ -993,15 +995,10 @@ added the project's own private GitHub remote `origin`. The agents never push, a
 
 ## Open problems and hand-over
 
-- `web/index.html` needs hosting (publishing is the lead's job; S9g added `pages.yml`, which does it once Pages is switched on, see
-  below). README and PRIVACY.md say nothing about a URL.
-- Pages is not switched on (S9g): after Settings > Pages > Source = "GitHub Actions" (and a public repository on a Free plan) the
-  first push to `master`, or "Run workflow", deploys `web/index.html`; the environment `github-pages` must allow `master`. `pages.yml`
-  names `master` only (`ci.yml` also names `main`). Do this before the first push of `pages.yml`, or its first runs fail in the
-  Actions tab.
+- Hosting is done: `.github/workflows/pages.yml` publishes `web/index.html` to GitHub Pages on a push to `master` (README section 13).
 - N2 and N3 of the third review stay as limits the docs must state (see the S9g stage): same-user ptrace and friends, and TIOCSTI, are not
   filtered, and the Yama setting that made them theoretical is Ubuntu's default (1); this Linux desktop has 0.
-- Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
+- Tor is merged (arti, inside the process; `--no-tor` goes direct): README sections 4 and 8 and docs/PRIVACY.md T1..T7 describe
   it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage
   timed Tor syncs of one and of 30 days (see "Measured sync times").
 - A Tor sync that meets a stream error in the block crawl opens the stream again after the last block received
@@ -1022,11 +1019,7 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   a whole block range beyond the limits above, a shorter request limit (the Tor client library already sets 60 s per
   request and an HTTP/2 keep-alive).
 - The sample goes stale: after 2026-10-25 about 02:05 UTC (its newest block is from 00:05 UTC) `check` on it prints stale-data
-  warnings (the README says so). A new refresh is cheap while `/tmp/s9e/refresh/tx` exists (see the next point).
-- `data/` (1.5 GB on disk, 67,977 raw transactions plus the events file, gitignored) from the 30-day sync is left in
-  the working tree, and `target/debug/zcrowd` is a fresh build for the video agent. The S9e refresh kept its own directory
-  outside the tree, `/tmp/s9e/refresh` (75,852 raw transactions, 1.76 GB on disk, the events file, the sync logs): a second
-  refresh over it fetches only what is new. `/tmp` is a tmpfs here, so it is gone after a reboot.
+  warnings (the README says so).
 - The README never says "linked" or "deanonymised" about the sample: it says "exactly
   one earlier shield of about that amount in the 14 days before".
 - Review hints: `crates/zcrowd-core/src/ingest.rs` (`link`, `resolve`), `source.rs` (`require_tls`, `Lwd::try_one`),

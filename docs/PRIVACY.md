@@ -193,8 +193,8 @@ HEADLESS OK (chromium 154.0.8037.92, firefox 157.0, webkit 27.2; the server saw 
 ```
 
 The live checks (T3, T4, T6) and the live one-day sync need the network and a real server. They were run once, over Tor, by `LIVE=1 bash tests/audit.sh` and
-`LIVE=1 bash tests/e2e.sh` on commit `d2f6ea9` on 2026-10-25; the commits after it change one comment in `check.rs` and
-`NOTES.md`. These two lines are quoted from that run, not repeated for this page:
+`LIVE=1 bash tests/e2e.sh` on commit `d2f6ea9` on 2026-10-25; `dd7f9ee`, the final code, differs from it by one comment in `check.rs` and
+by `NOTES.md`, and what the later commits changed is said at the top of this page. These two lines are quoted from that run, not repeated for this page:
 
 ```
 ok    T3/T4/T6 lookups (any name)=0, lookups of the server name=0, connects to server IPs=0, port-53 sends=0, distinct connect destinations (Tor relays)=5; through Tor: the tip, every block and 20 transactions; 6 files, all arti directory data, guard state or locks; 0 mention the server name

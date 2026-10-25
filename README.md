@@ -2,6 +2,10 @@
 
 **Before you shield or unshield Zcash, see how many other transactions look like yours: offline, on your own machine, before anything is sent.**
 
+[![CI](https://github.com/Kylne700/zcrowd/actions/workflows/ci.yml/badge.svg)](https://github.com/Kylne700/zcrowd/actions/workflows/ci.yml)
+
+**Try it:** the [live demo](https://kylne700.github.io/zcrowd/) (the one-file web page of section 13; GitHub sees your visit, never the amount) or the [demo video](https://youtu.be/ZAxaw6B81Ug).
+
 ![The zcrowd web page opened from a local file after the amount 3.73 was typed for an unshield: the verdict RED (one earlier shield of about that amount, in Sapling), the three pool lines, the notes and the first matching entry.](docs/screenshot.png)
 
 An unshield (money leaving a shielded pool) shows its amount in public, and so did the shield it came from. If nobody else
@@ -16,8 +20,8 @@ web page. It computes only what any chain observer can already compute, for your
 | AI disclosure | Built by an AI agent team (Claude) for its author. |
 | Rust | 1.90 or newer (`rust-version` in `Cargo.toml`; `cargo +1.90.0 check --workspace --all-targets --locked` passes). The tests and the audit ran on 1.97.1, the version CI pins (the repository has no `rust-toolchain` file, so your own toolchain is used); the tests under 1.90 are NOT VERIFIED. A C compiler is needed (SQLite is bundled). |
 | First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, on a Linux desktop, crates already downloaded; a second run the same day, with other jobs using the machine (load average 4 before it started), took 101 s; a first build elsewhere also downloads the crates). |
-| Platform | Tested on Linux. macOS and Windows are NOT VERIFIED (end of this file). |
-| Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents only. |
+| Platform | Linux is the tested platform (140 tests, the audit and `tests/e2e.sh`, by hand and in CI). macOS (aarch64) and Windows (x86_64-msvc) were built and tested in CI only: 135 and 132 tests passed in [run 40171306113](https://github.com/Kylne700/zcrowd/actions/runs/40171306113) (jobs 121102516531 and 121102516515, commit `70d5187`). Neither was run by hand on a real Mac or Windows PC, and no `sync` ran on either (NOT VERIFIED, end of this file). Windows has no network cut. |
+| Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents (and the screenshot) and 3 lines of `.github/workflows/ci.yml` (a macOS fix, section 14). The CI runs named in this README are of `70d5187`. |
 | Data | `fixtures/flows-sample.ndjson`: 74,643 real mainnet events, blocks 3,493,237 to 3,529,525 (2026-09-23 08:32 UTC to 2026-10-25 00:05 UTC, 31.65 days). The quick start and every example below run on it without a network. |
 
 1. [The leak](#1-the-leak)
@@ -753,8 +757,10 @@ in its own error (`check --unshield --data f 1.2345` prints `error: unexpected a
 **The network cut.** `check`, `report` and `verify` have no network code (audit P2 b) and still cut their own network
 before they read any data. On Linux that is an empty network namespace (where the kernel allows an unprivileged user
 namespace) plus a seccomp filter that makes creating any socket fail; each is tested (section 3.3 shows the notes the
-command prints, PRIVACY.md P2 the tests). macOS has code for the system's no-network sandbox profile that has never been run
-(NOT VERIFIED); Windows has nothing, and the command says so (`network NOT cut`). What this does not stop is in the honest limits
+command prints, PRIVACY.md P2 the tests). macOS has the system's no-network sandbox profile; it ran in CI only (job
+121102516531: the unit test `sandbox::tests::child::enter_cuts_a_connection_in_a_child` passed, and the probe printed
+`note: network cut for this command: macOS sandbox (no-network)` and `blocked: Operation not permitted (os error 1)`), never
+on a real Mac (NOT VERIFIED there). Windows has nothing, and the command says so (`network NOT cut`). What this does not stop is in the honest limits
 (section 11): it is not a barrier between zcrowd and other programs of the same user.
 
 **Network privacy of `sync`.** Only `sync` uses the network. By default all of its traffic to the lightwalletd server
@@ -844,7 +850,9 @@ Kappos, Yousaf, Maller and Meiklejohn, "An Empirical Analysis of Anonymity in Zc
 (USENIX Security 18), Baltimore, August 2018, pp. 463-477
 ([USENIX page](https://www.usenix.org/conference/usenixsecurity18/presentation/kappos)), studied how well Zcash's shielded
 pool hides its users in practice, from public chain data alone. Its Heuristic 5 (section 6.3 of the
-[arXiv version](https://arxiv.org/abs/1805.03180); the paper credits it to earlier work) links a transparent-to-shielded
+[arXiv version](https://arxiv.org/abs/1805.03180); the paper credits it to J. Quesnelle, "On the linkability of Zcash
+transactions", [arXiv:1712.01210](https://arxiv.org/abs/1712.01210), 2017, who calls such a pair a round-trip transaction)
+links a transparent-to-shielded
 and a shielded-to-transparent transaction when exactly one of each carries the same value and the second follows the first
 within a small number of blocks. That is the kind of observer zcrowd models. zcrowd differs in where it runs and what it reports:
 it runs on the user's side, before the transaction exists, offline on public data; it counts how many entries share the
@@ -934,17 +942,21 @@ The network cut
   it does not, only the seccomp filter holds and the note on stderr says `network cut for this command: seccomp socket
   filter (no empty network namespace: ...)`; audit P2(a) is then skipped (`SKIP ... (NOT VERIFIED)`) and the test
   `check_report_and_verify_each_leave_the_network_before_they_read_anything`, which looks for the namespace, is expected to
-  fail (not run on such a host; the seccomp tests do not depend on it). The filter is built for x86_64 and aarch64 only.
-  macOS has a no-network profile that was never run (if it cannot be applied the note says `network NOT cut`), and Windows
-  has nothing (its note says `network NOT cut`).
+  fail (not run on such a host; the seccomp tests do not depend on it). That case was only simulated by hand
+  (`max_user_namespaces=0`). On the default Ubuntu 24.04 runner of CI job 121102516415, where
+  `apparmor_restrict_unprivileged_userns` was `1` and `unshare -rn` was refused, zcrowd's own note still read
+  `empty network namespace + seccomp socket filter` and that test passed. The filter is built for x86_64 and aarch64 only.
+  macOS has a no-network profile that ran in CI only, not on a real Mac (job 121102516531; if it cannot be applied the note
+  says `network NOT cut`), and Windows has nothing (its note says `network NOT cut`).
 
 The web page and the release
 
 - **The page.** GitHub sees your IP address when you load it from GitHub Pages, as any website does, but never the amount.
   Browser extensions can read what you type. The strongest option is the command line tool, or the file opened offline in
   a private window with extensions off. It has no address input (`--to` is CLI only).
-- **Releases and CI are unproven.** Releases are drafts; this README gives no download instructions and makes no claim of
-  bit-for-bit reproducible builds. The workflows have never run on GitHub (section 14). What was run by hand, once, on
+- **Releases are unproven; CI has run.** Releases are drafts; this README gives no download instructions and makes no claim of
+  bit-for-bit reproducible builds. `ci.yml` and `pages.yml` ran green on GitHub (runs 40171306113 and 40171306059 on
+  `70d5187`, section 14); `release.yml` never ran. What was run by hand, once, on
   Linux x86_64 with the final code: `.github/scripts/release.sh` built the release binary, started it on the sample,
   found that it links glibc, libm and libgcc_s only (SQLite is built in), packed it and found no path of the build
   machine in the archive (docs/PRIVACY.md, R1). The macOS and Windows archives were not built.
@@ -1010,9 +1022,11 @@ are GitHub's, not ours. Verified in headless Chromium 154, Firefox 157 and WebKi
 HEADLESS OK (chromium 154.0.8037.92, firefox 157.0, webkit 27.2; the server saw 3 page loads and nothing else)
 ```
 
-Real Safari is NOT VERIFIED. A hosted copy is meant to appear at https://kylne700.github.io/zcrowd/ when `.github/workflows/pages.yml` has
-run (it publishes `web/index.html` and nothing else; every job has `contents: read`, only the deploy job also has
-`pages: write` and `id-token: write`); it has not run yet, so that address is NOT VERIFIED.
+Real Safari is NOT VERIFIED. A hosted copy is live at https://kylne700.github.io/zcrowd/ and `.github/workflows/pages.yml`
+ran on `70d5187` (run 40171306059, jobs 121102516123 and 121102545676); it publishes `web/index.html` and nothing else,
+every job has `contents: read`, and only the deploy job also has `pages: write` and `id-token: write`. On 2026-10-25 the
+address answered with 835,793 bytes (HTTP 200, `text/html`) whose SHA-256 is the value in section 3.1, so the hosted copy is
+byte-identical to `web/index.html`. The headless test also passed in CI, one job per browser (section 14).
 
 ## 14. Dependencies, licence, roadmap
 
@@ -1024,10 +1038,29 @@ dev-dependencies, for its tests only. SQLite is bundled, so a C compiler is need
 
 CI (`.github/workflows/ci.yml`) builds and tests on Linux, macOS and Windows, runs a sandbox job, the whole e2e and audit
 on Linux, the page in three browsers and `cargo deny`; `release.yml` builds archives for Linux x86_64, macOS aarch64 and
-Windows x86_64 and only ever drafts a release. None of the workflows has run on GitHub yet. The three files were checked
-only by parsing them as YAML, and a script asserted the triggers, permissions, job layout and action pins of `pages.yml`.
-All 18 `uses:` lines in them name a full commit SHA, and `cargo-deny` 0.20.2 is downloaded from its release page and
-checked against a SHA-256 before it runs.
+Windows x86_64 and only ever drafts a release. `ci.yml` and `pages.yml` have run on GitHub; `release.yml` has not.
+
+CI run [40171306113](https://github.com/Kylne700/zcrowd/actions/runs/40171306113) (push to `master`, commit `70d5187`,
+2026-10-25) passed in all 9 jobs:
+
+- fmt, clippy, tests and audit (Linux), job 121102516516: 140 tests; the audit ended `AUDIT OK (1 check(s) skipped and NOT
+  VERIFIED ...)`, the one skipped being the live Tor leak check, which needs `LIVE=1`; then `E2E OK`.
+- build and test, Ubuntu 24.04, job 121102516481: 140 tests. macOS (`macos-latest`, image `macos-26-arm64`), job
+  121102516531: 135 tests. Windows (`windows-latest`, `windows-2025-vs2026`), job 121102516515: 132 tests.
+- sandbox on a default Ubuntu 24.04, job 121102516415: 6 tests (3 in the binary, 3 in `tests/cli.rs`) and the probe. This
+  runner showed `apparmor_restrict_unprivileged_userns=1` and `unshare -rn: refused`; the note still read `empty network
+  namespace + seccomp socket filter` (section 11).
+- the page in headless chromium 156.0.8078.4 (job 121102516425), firefox 157.0 (121102516555) and webkit 27.2
+  (121102516500): `HEADLESS OK` in each.
+- `cargo deny`, job 121102516542: advisories, bans, licenses and sources ok.
+
+The first run on all three systems (a manual dispatch, run 40157515838 on `dd7f9ee`) failed in one step, "The macOS
+sandbox as a user sees it" of the macOS job; the other 8 jobs passed. macOS `script(1)` echoed `^D` into the output of the
+step; commit `a7cc89a` (3 lines of `ci.yml`) strips it, and the dispatch run 40158108612 on `a7cc89a` passed in all 9 jobs.
+The Pages run 40171306059 is described in section 13. Before they ran, the three workflow files were checked only by parsing them as
+YAML, and a script asserted the triggers, permissions, job layout and action pins of `pages.yml`; `release.yml` has had
+only that. All 18 `uses:` lines in them name a full commit SHA, and `cargo-deny` 0.20.2 is downloaded from its release
+page and checked against a SHA-256 before it runs.
 
 Track: CORE & TOOLING. The library (`zcrowd-core`) and `--json` are for wallet and SDK authors. Roadmap, not built: a
 wallet-side hook that shows the verdict on the send screen.
@@ -1038,14 +1071,15 @@ This is the one list. Nothing here was run or seen; each line says what is missi
 
 Platforms and publishing
 
-- Windows and macOS: no build, no test, no sandbox run and no `sync` on either (the code of the macOS no-network profile
-  was never run). On Windows also the Tor state directory default (`%LOCALAPPDATA%\zcrowd\tor`) and the stop handler
-  (`tests/stop.rs` is Unix-only and the Windows fallback was never built). A Linux aarch64 build.
-- GitHub: none of `ci.yml` (including its macOS and Windows test jobs, the `sandbox` job and `cargo deny`), `release.yml`
-  (including its draft step) and `pages.yml` has run; the Pages address and the environment rule that must allow `master`.
+- Windows and macOS on a real machine, and a `sync` on either (CI built and tested both, section 14, but it is offline on
+  purpose and ran no `sync`). On Windows also the Tor state directory default (`%LOCALAPPDATA%\zcrowd\tor`) and the stop
+  handler (`tests/stop.rs` is Unix-only; the Windows fallback compiled in job 121102516515 and was never run). A Linux
+  aarch64 build.
+- GitHub: `release.yml` (including its draft step) has not run.
 - The tests under Rust 1.90 (only `cargo check --workspace --all-targets --locked` was run on it; the tests ran on 1.97.1).
-- A default Ubuntu 24.04 host, where AppArmor restricts user namespaces: it was only simulated with
-  `max_user_namespaces=0`.
+- A real default Ubuntu 24.04 host on which the empty network namespace is refused: by hand that case was only simulated
+  with `max_user_namespaces=0`; the CI runner of job 121102516415 (`apparmor_restrict_unprivileged_userns=1`) still gave
+  zcrowd an empty network namespace (section 11).
 - Real Safari.
 
 Sync, Tor and servers

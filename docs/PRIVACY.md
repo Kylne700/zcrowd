@@ -3,7 +3,7 @@
 The rule of this repository: no privacy claim without a check that can fail. Each claim below has a number, the check
 behind it, and the result of that check on the final code; the list after the tables says what each check does not
 cover. P claims are about what you type and what the commands do, T claims about `sync` over Tor, V claims about what the
-verdict rests on.
+verdict rests on, N lists the note about the network cut, and R is about release archives.
 
 ```
 bash tests/audit.sh          # P1 to P11 and T1, T2, T5, T7. No network needed. Prints AUDIT OK only if every step holds
@@ -46,7 +46,7 @@ argument parser echoes a rejected argument in its own error; the stdin form (`-`
 |---|---|---|---|
 | P1 | `sync` asks the server only for what depends on the block range: the tip, the compact blocks and the raw transaction of each candidate. It has no input for an amount, an address or a transaction id of yours. | Test `sync_requests_depend_only_on_range` (`crates/zcrowd-core/tests/ingest.rs`): two syncs of the same range from empty caches record the same requests; each is `tip`, `blocks <range>` or `tx <id>`; the `tx` requests are exactly the candidates, in order. The audit runs the whole `ingest` test binary and requires six named tests to exist. | `ok P1` |
 | P2 | `check`, `report` and `verify` cannot use the network. They contain no network code, and each cuts its own network before it reads any data. | (a) They work with the network removed from outside (`unshare -rn`). (b) `git grep` finds no network code in `check.rs`, `report.rs` and `verify.rs`. (c) Test `sandbox_blocks_connections`: a loopback connection works before `sandbox::enter()` and fails after. (d) Tests `sandbox::tests::*`: the seccomp filter refuses TCP, UDP, Unix sockets, `socketpair`, `io_uring` and other system-call ABIs, through `enter()` and on its own. (e) Test `check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything`: each command, while it waits for its data file (a FIFO), has one seccomp filter more than the test. In `cargo test`, where the kernel allows an unprivileged user namespace, `check_report_and_verify_each_leave_the_network_before_they_read_anything` shows the same for the network namespace. | `ok P2` five times |
-| P3 | What you type is never written to disk, logged, sent anywhere or printed back as typed: the `check:` header carries no amount, and `--json` carries neither the typed amount nor the typed address. | Static: only `ingest.rs` (raw cache), `model.rs` (the flows files, called by `sync` only), `report.rs` (the report), `sync.rs` (lock file) and `source.rs` (Tor state directory, `sync` only) contain file-writing calls; `check.rs` and `verify.rs` cannot write. Dynamic: a fresh random address and a random 9-digit amount are typed through stdin and through arguments, with HOME, TMPDIR and the XDG directories pointing at empty directories. Afterwards neither value (nor the amount in zatoshi, nor the address hash) is in any file of the repository tree or of those directories, no file was created or changed, and neither is in the text, `--json` or `--shield` output. Before that, a planted file is shown to be found by the same scan. Test `the_amount_typed_is_never_printed_back` (`crates/zcrowd/tests/cli.rs`): the same for a fixed amount, also for rejected input. | `ok P3` twice |
+| P3 | What you type is never written to disk, logged, sent anywhere or printed back as typed: the `check:` header carries no amount, and `--json` carries neither the typed amount nor the typed address. | Static: only `ingest.rs` (raw cache), `model.rs` (the flows files, called by `sync` only), `report.rs` (the report), `sync.rs` (lock file) and `source.rs` (Tor state directory, `sync` only) contain file-writing calls; `check.rs` and `verify.rs` cannot write. Dynamic: a fresh random address and a random 9-digit amount are typed through stdin and through arguments, with HOME, TMPDIR and the XDG directories pointing at empty directories. Afterwards neither value (nor the amount in zatoshi, nor the address hash) is in any file of the repository tree or of those directories, no file was created or changed, and neither is in the text, `--json` or `--shield` output. Before that, the scan is tried on a toy repository: a planted file is found, a file in an ignored directory is skipped and a plain file next to it is found again. The repository scan reads only the files git shows, so the ignored `data/` (about 1.6 GB of chain data) and `target/` are not read there; a check that wrote into them is caught by the test that no file was created or changed. Test `the_amount_typed_is_never_printed_back` (`crates/zcrowd/tests/cli.rs`): the same for a fixed amount, also for rejected input. | `ok P3` twice |
 | P4 | zcrowd does not touch key material: no seed phrase, key, viewing key or wallet file is read or accepted. | `git grep -Ei 'mnemonic\|seed\|ufvk\|viewing' crates` finds nothing. The inputs are the data file, the raw cache, what you type and the server's answers. | `ok P4` |
 | P5 | No analytics, telemetry, update check or crash reporter is among the dependencies. | `cargo tree --locked` lists name and version of every crate: none of reqwest, sentry, posthog, segment, openssl, native-tls, analytics, telemetry, update. `Cargo.lock` is tracked. | `ok P5`: 525 crate versions in the tree, 624 packages in `Cargo.lock` |
 | P6 | TLS to the server is verified against the webpki root set; plain `http://` is refused except to a lightwalletd on this machine; no certificate check is switched off. | No `accept_invalid` or `danger` in `crates/`; webpki roots are set in `source.rs`; every default server starts with `https://`; test `plain_text_only_to_this_machine` (`source.rs`); `sync --server http://...` is refused ("refusing a plain-text connection") before any connection (run with the network removed); a local TLS server with a self-signed certificate is rejected (`invalid peer certificate: UnknownIssuer`), nothing is written. | `ok P6` twice |
@@ -84,6 +84,49 @@ These are tests of `cargo test --workspace` (140 tests; `bash tests/e2e.sh` runs
 | V8 | A data window shorter than the lookback is reported as short, without slack. | `a_window_shorter_than_the_lookback_is_a_short_window_without_slack`. |
 | V9 | A damaged or foreign data file is refused or located, not guessed at; two syncs cannot write the same output at once. | `a_damaged_event_line_is_reported_with_its_line_number_in_the_file`, `check_and_report_refuse_data_without_this_format_version`, `a_second_sync_on_the_same_output_is_refused_while_the_first_holds_the_lock`; the data-file tests in `crates/zcrowd-core/tests/meta.rs`. |
 | V10 | Ctrl-C and SIGTERM leave the saved data as it was; the next run goes on from the saved transactions. | `ctrl_c_stops_a_sync_without_touching_the_saved_data`, `the_terminate_signal_stops_a_sync_without_touching_the_saved_data` (`crates/zcrowd/tests/stop.rs`, Unix only). |
+| V11 | `--to` takes a t1, t3 or tex1 address, or a Unified Address, which is checked through its transparent receiver (a note says so). A Unified Address with no transparent receiver, one of a test network and text that is no address are each refused with their own sentence, and no address is ever printed back. Bech32m forms (tex1, Unified) are accepted in lower case or all capitals, never mixed. | `a_unified_address_is_checked_through_its_transparent_receiver`, `a_unified_address_without_a_transparent_receiver_says_it_does_not_leave_the_shielded_pools`, `a_unified_address_in_capitals_is_accepted_but_mixed_case_is_not` and `decode_tex_in_capitals_is_accepted_but_base58_and_mixed_case_are_not` (`crates/zcrowd-core/tests/decode.rs`); `a_unified_address_is_checked_through_its_transparent_receiver_and_never_printed_back` (`crates/zcrowd/tests/cli.rs`: the note, the refusals, capitals and mixed case, and neither the Unified Address nor its transparent address in stdout or stderr). |
+
+### N: the note about the network cut
+
+`check`, `report` and `verify` print one `note:` line on stderr that names the layers of the network cut in place (claim P2).
+It is printed whenever a layer is missing; with both layers in place only when stderr is a terminal, so `--json 2>&1` stays
+plain JSON on a normal Linux machine. Where a layer is missing the note comes first on stderr, so do not merge stderr into
+the JSON there. There are seven lines (`<error>` stands for the error text of the operating system; the unit test
+`sandbox::tests::the_note_names_the_layers_in_place_and_says_not_cut_without_one` asserts each one):
+
+| Where | Line |
+|---|---|
+| Linux, both layers | `note: network cut for this command: empty network namespace + seccomp socket filter` |
+| Linux, no empty network namespace (user namespaces off or refused) | `note: network cut for this command: seccomp socket filter (no empty network namespace: <error>)` |
+| Linux, a CPU the filter is not built for (it exists for x86_64 and little-endian aarch64) | `note: network cut for this command: empty network namespace (no seccomp socket filter: not built for this CPU architecture)` |
+| Linux, neither | `note: network NOT cut for this command (no empty network namespace: <error>; no seccomp socket filter: <error>); it has no network code, but nothing stops it at run time` |
+| macOS, profile applied | `note: network cut for this command: macOS sandbox (no-network)` |
+| macOS, profile refused | `note: network NOT cut for this command (no macOS sandbox (no-network): <error>); it has no network code, but nothing stops it at run time` |
+| Any other system (Windows) | `note: network NOT cut for this command (no sandbox on this OS); it has no network code, but nothing stops it at run time` |
+
+Seen in a real run: the first line (README section 3.3) and the second. The second was made by hand on 2026-10-25 by
+switching user namespaces off inside `unshare -r` and then running the probe, which prints the note and tries to connect
+once the cut is in place:
+
+```
+unshare -r sh -c 'echo 0 > /proc/sys/user/max_user_namespaces && zcrowd sandbox-probe 127.0.0.1:9 --sandbox'
+```
+
+Output, stderr first (the note), then stdout:
+
+```
+note: network cut for this command: seccomp socket filter (no empty network namespace: No space left on device (os error 28))
+blocked: Operation not permitted (os error 1)
+```
+
+The other five lines are only asserted by the unit test: no run has reached them (the macOS code was never run, and Windows
+was never built).
+
+### R: release archives
+
+| # | Claim | Check | Result |
+|---|---|---|---|
+| R1 | A release archive holds no path of the machine that built it (no home directory, no cargo or rustup directory, no workspace path), not even inside the binary. | `.github/scripts/release.sh <target> <version>` builds with `--remap-path-prefix` for the cargo home, the rustup home and the workspace, starts the binary on the sample, checks that it links only glibc libraries (Linux), packs it with `LICENSE` and `README.md`, and scans the staged files and the unpacked archive (binary included, ignoring case) for paths into a home directory (the Linux, macOS and Windows spellings) and for the builder's own directories; it fails on a hit, and it compares the unpacked binary with the one it tested. Control: the function `check_clean` of that script, run on the same code built without the remap. | Run once on Linux x86_64 on 2026-10-25 with the final code: exit status 0, 9,710,656 bytes, 1 min 16 s (cargo offline, crates already downloaded). Control: the build without the remap (28,021,456 bytes) holds 1,386 matches and the scan fails; the remapped binary (28,029,728 bytes) holds none and passes. |
 
 ## What each check does not cover
 
@@ -98,6 +141,9 @@ These are tests of `cargo test --workspace` (140 tests; `bash tests/e2e.sh` runs
 - **P9.** One report, generated from the sample.
 - **P10.** The script check is a list of API names, not a proof; the CSP is what stops a request. The audit runs Chromium only; Firefox and WebKit are covered by the separate run below, which the audit does not make. Real Safari is NOT VERIFIED. The CSP is a `<meta>` tag inside the file: it protects the copy you opened, and a host that serves you a modified copy is the reason to compare the SHA-256 of `web/index.html` (README section 3). Browser extensions can read what you type.
 - **P11.** A pattern scan (home paths, a personal string, mail-like strings), not a review of every file for personal facts.
+- **V11.** A Unified Address of a test network is tried; any other kind of address that `--to` does not take (a plain Sapling address, say) gets the same sentence by the code, and no test tries it.
+- **N.** Two of the seven lines were seen. The macOS lines come from code that was never run, and Windows was never built (README NOT VERIFIED).
+- **R1.** Linux only, and only by hand: `release.yml`, which runs the script for the three targets, has never run on GitHub, so the macOS and Windows archives are NOT VERIFIED. C code that `cc` compiles is not covered by the path remap; the scan would catch a leak from it (this run found none), and the fix would be `-ffile-prefix-map` in `CFLAGS`. The scan looks for the build machine's paths, not for other personal data.
 - **T1, T2, T5, T7.** The interposer sees libc calls, not raw system calls. The tests need Linux, `unshare -rn` and a C compiler; without them the audit prints `SKIP`. Tor failing to start is simulated by an empty network namespace (no network at all); a real network that blocks Tor was not tried.
 - **T3, T4, T6.** The interposer is evidence, not a packet capture: it sees `getaddrinfo`, `gethostbyname`, `connect`, `sendto`, `sendmsg` and `sendmmsg`, not raw system calls, and DNS on port 53 only when sent through those calls. Zero name lookups of any kind in Tor mode fits the design (the exit relay resolves the server name), but it is not a proof against code that bypasses libc. The Tor leg fetches only 20 transactions, one range, one run. The runs need the network and were made once on `d2f6ea9` (below), not by the offline audit.
 - **V.** `cargo test` ran on Rust 1.97.1; under Rust 1.90 only `cargo check` ran (NOT VERIFIED beyond that). One command-line test failed once in a full run on a busy machine because it could not start the binary; it did not return and the cause is unknown.

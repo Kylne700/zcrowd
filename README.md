@@ -14,7 +14,7 @@ web page. It computes only what any chain observer can already compute, for your
 |---|---|
 | Track | ZECATHON, CORE & TOOLING. Licence: MIT (`LICENSE`). |
 | AI disclosure | Built by an AI agent team (Claude) for its author. |
-| Rust | 1.90 or newer (`rust-version` in `Cargo.toml`; `cargo +1.90.0 check --workspace --all-targets --locked` passes). The tests and the audit ran on 1.97.1, the version CI pins; the tests under 1.90 are NOT VERIFIED. A C compiler is needed (SQLite is bundled). |
+| Rust | 1.90 or newer (`rust-version` in `Cargo.toml`; `cargo +1.90.0 check --workspace --all-targets --locked` passes). The tests and the audit ran on 1.97.1, the version CI pins (the repository has no `rust-toolchain` file, so your own toolchain is used); the tests under 1.90 are NOT VERIFIED. A C compiler is needed (SQLite is bundled). |
 | First build | 76 s for `cargo build --release --locked` from an empty target directory (2026-10-25, Debian 13, 20 cores, 62 GB RAM, crates already downloaded; a first build elsewhere also downloads them). |
 | Platform | Tested on Linux. macOS and Windows are NOT VERIFIED (end of this file). |
 | Tested code | Commit `dd7f9ee` (called the final code below). Unless a line names another build, the example outputs and the test and audit results in this README are of that commit; the commits after it change documents only. |
@@ -118,15 +118,33 @@ How to read it. The three `pool` lines are the point: an observer ties an unshie
 1.0 ZEC has 160 entries into Ironwood and none into Sapling or Orchard, so `--pool ironwood` says GREEN and
 `--pool sapling` says NO MATCH (nothing of that amount for an observer to match). With the default `--pool any` the single
 `verdict:` line is the worst of the pools, here GREEN. GREEN means a big crowd for amount and timing only, not "private".
-The `warning:` line about the age of the newest block depends on your clock: the sample is a fixed snapshot, so the age
-grows every hour (after two days it is printed in days). Fetch fresh data (section 4) and the warning goes away; the
-`shields after ... are not counted` line stays, because a shield made after the newest synced block cannot be seen.
+The `warning:` line about the age of the newest block depends on your clock: `check` prints it when that block is more than
+2 hours old. The newest block of the sample is from 2026-10-25 00:05 UTC, so every check on the sample prints it from
+02:05 UTC on that day, and the age grows every hour (after two days it is printed in days). Fetch fresh data (section 4)
+and the warning goes away; the `shields after ... are not counted` line stays, because a shield made after the newest
+synced block cannot be seen. If your computer's clock is more than 3 hours behind the newest block, or more than a year
+after it, `check` adds a warning about the clock: the first says "the clock is wrong, so how old the data is cannot be
+judged", the second says the data is out of date or the clock is wrong. Both start with
+`warning: this computer's clock (...)`.
 
 Other flags: `--pool sapling|orchard|ironwood|any` (the pool your funds are in; the default `any` scores every pool and
 prints the worst), `--shield X` (you plan to shield: X is the amount that arrives in the pool, what you shield minus the
 fee, not what your wallet sends), `--to ADDRESS` (address reuse, section 5), `--lookback-days`, `--tolerance-zat`,
 `--fee-allowance-zat`, `--json` (section 7). `zcrowd report` writes one self-contained HTML file. `zcrowd verify`
 recomputes one event from its raw transaction (section 9).
+
+The numbers have limits, all shown in `--help`: `--lookback-days` and `sync --days` take 1 to 3650, `--tolerance-zat` and
+`--fee-allowance-zat` 0 to 100000000 (1 ZEC). A value outside them is refused before anything is read: exit status 2,
+nothing on stdout. Real output (stderr) of `zcrowd check --unshield - --lookback-days 0`:
+
+```
+error: invalid value '0' for '--lookback-days <LOOKBACK_DAYS>': 0 is not in 1..=3650
+
+For more information, try '--help'.
+```
+
+The test is `numeric_options_have_limits_and_huge_values_are_refused_not_crashed`; the library itself neither panics nor
+overflows on the largest values (`huge_parameters_neither_panic_nor_overflow`).
 
 ## 3. Check the privacy claims in five minutes
 
@@ -342,6 +360,18 @@ refusal (`no coverage file next to the data (an interrupted sync?): run `zcrowd 
 another zcrowd version (`FORMAT_VERSION` 2) is refused with `run `zcrowd sync` again`; a damaged line is reported
 with its line number (`Error: cannot read <file>`, then `line 4, column 17: EOF while parsing a value`).
 
+Syncing into data you already have. If `--out` holds data of this version and the new block range overlaps it or touches it
+(the first block of one follows the last of the other), the two are merged: events inside the new range are replaced, older
+ones are kept, and the coverage file records both ranges as one. If the new range does not touch the old one, a gap would
+make the coverage claim false, so the old data is dropped and `sync` prints `note: new range does not touch the existing
+data; replacing it`. Data without a usable coverage file of this version (an older zcrowd, an interrupted sync) is never
+merged: `note: the existing data has no usable coverage file of this zcrowd version; replacing it`. Only that last case
+has a test (`sync_replaces_data_of_another_version_and_stores_the_format_version_and_skipped_counts`); the merge and the
+no-touch case are read from `crates/zcrowd/src/sync.rs` and not tested (NOT VERIFIED, end of this file). The first and last
+times of the coverage are the earliest and the latest block time seen, because block times are not monotonic
+(`the_windows_times_are_the_extremes_of_the_block_times_not_those_of_its_edge_blocks`). A cached raw transaction that is
+not valid hex is fetched again and overwritten; it does not stop the sync (`a_corrupt_cache_file_is_fetched_again_and_overwritten`).
+
 Tor details. `sync` opens 4 connections, each an isolated Tor client with its own circuit, each replaced after 10
 minutes, with at most `--concurrency` requests in flight (default and maximum 8). Transactions are fetched out of order
 and written in candidate order, so the file is byte-identical to the one `--no-tor` writes (the `flows.ndjson` of 18
@@ -355,6 +385,16 @@ NOT VERIFIED as repeatable. In one test the first connection
 through a freshly started Tor to a host other than `zec.rocks` timed out at the exit after 23 s
 (`operation timed out at exit`): the failure is loud and nothing goes direct, so run the command again; whether that
 happens to `zec.rocks` is not shown (the cold one-day sync connected at the first attempt).
+
+If the default Tor directory cannot be found (`$XDG_CACHE_HOME` and `$HOME` unset or not absolute paths; on Windows
+`%LOCALAPPDATA%`; a relative value is ignored), `sync` stops before Tor starts and does not go direct. Real output with an
+empty environment (`env -i`), exit status 1, nothing on stdout and no output directory:
+
+```
+Error: no cache directory (XDG_CACHE_HOME and HOME not set, or not an absolute path); pass --tor-dir
+
+Tor was selected, so zcrowd did not contact the server directly and will not fall back to a direct connection. To sync directly instead (the server then sees your IP address), run again with --no-tor.
+```
 
 Measured sync times. Machine: Debian 13, 20 cores, 62 GB RAM, shared with other syncs and builds (load average 2 to 12), Tor
 state directory new for each run unless the row says otherwise, server `zec.rocks`, all runs on 2026-10-24 unless the
@@ -421,7 +461,10 @@ lightwalletd (public, TLS) --compact blocks--> candidates --full raw tx--> event
    only, not "private". An amount with five or more decimals only adds a note ("the exact amount is easy to recognise
    later, e.g. at an exchange; round amounts blend in"); it never changes the verdict. `check` also lists up to ten
    matches (newest first) and, when one exists, nearby amounts within 10% with a bigger crowd ("popular nearby
-   amounts"), each scored the way `check` scores an amount typed by hand.
+   amounts"), each scored the way `check` scores an amount typed by hand (under `--pool any` by the worst of the pools),
+   so a suggestion never shows more than checking that amount shows. The amounts offered are those that the pool which
+   decided the verdict saw entries at: an amount that only another pool saw is not offered, though checking it by hand
+   could read better.
 5. `--shield X` is for money you are about to shield: the crowd is the other shields and moves into the pool of about X
    (the decoys for a later unshield of the whole note). X is the amount that arrives in the pool (what you shield minus
    the fee, not what your wallet sends). Only Sapling and Ironwood are scored, because from NU6.3 on no value may enter
@@ -429,9 +472,18 @@ lightwalletd (public, TLS) --compact blocks--> candidates --full raw tx--> event
    unique".
 6. `--to ADDRESS` adds address reuse, the strongest real link, and it does not depend on the amount: RED if that address
    was the transparent source of a shield anywhere in the data (into any pool), AMBER if it received earlier unshields,
-   clear otherwise. The address can be t1, t3, tex1, or a unified address with a transparent receiver; `-` types it
-   privately; Bech32m forms are accepted in lower case or all capitals, never mixed. Like the crowd, this sees only up to
-   the newest synced block: an address that is clear or only received unshields can still turn RED if it shields later,
+   clear otherwise. The address can be t1, t3, tex1, or a Unified Address (u1...) with a transparent receiver; `-` types
+   it privately; Bech32m forms are accepted in lower case or all capitals, never mixed. A Unified Address is checked
+   through its transparent receiver, and `check` says so after the `data:` line (also under `notes` in `--json`):
+   `note: --to is a Unified Address: its transparent receiver is checked`, and, when the address also has a shielded
+   receiver, that wallets prefer that receiver (ZIP 316), so a payment to this address normally stays in the shielded
+   pools and is not an unshield. A Unified Address with no transparent receiver is refused (exit status 1, nothing on
+   stdout): `Error: this Unified Address has no transparent receiver: sending to it does not leave the shielded pools`.
+   A Unified Address of a test network is refused with `need a mainnet transparent address (t1..., t3... or tex1...) or
+   a Unified Address (u1...) with a transparent receiver` (so is any other address kind that `--to` does not take, which
+   no test tries), and text that is no address, or a damaged one, with `not a Zcash address`. The address you typed, and
+   the transparent address inside a Unified Address, are never printed back (docs/PRIVACY.md, V11). Like the crowd, this
+   sees only up to the newest synced block: an address that is clear or only received unshields can still turn RED if it shields later,
    and `check` then prints `shields after <time> UTC (last synced block) are not counted`.
 7. `report` writes one self-contained HTML file for the data you give it, with the counts of section 1 (audit P9: no
    `src=`, `href=`, `url()`, `http(s)://`, `@import` or `<script` in it).
@@ -746,7 +798,11 @@ worse case). `sync` therefore believes nothing it can recompute:
   commitment tree between the two tree states the server gives for the ends of the range (the `tree check:` line). A
   server that leaves a pool out of its blocks, or only some of it, is refused, and a server whose tree for a long-active
   pool is empty is refused before any block is asked for. A server that serves no tree states gets a weaker check: a pool
-  with no data at all in more than 1,000 blocks from NU6.3 on is refused.
+  with no data at all in more than 1,000 blocks from NU6.3 on is refused. That check has a known weak spot: Orchard
+  activity is falling (the 36,289 blocks of the sample hold Orchard data in 2,659 of them; a comment in `ingest.rs`
+  records 60 such blocks on 2026-10-24, three times fewer than the 60-day average), so one day a long range could hold
+  no Orchard block by chance and be refused wrongly, for a server without tree states only. The refusal is loud, never a
+  wrong answer; the `pools:` line of `sync` shows the live counts.
 
 What this cannot do: compact blocks carry no proof of work, so a server that keeps its story consistent is not detected,
 and the tree states come from the same server as the blocks, so a server that lies in both is not detected either. The
@@ -807,7 +863,9 @@ What a verdict means
   lookback. With `--pool any` (the default) the verdict is the worst of the pools the transaction can involve; if your
   funds sit in one pool, say which with `--pool`.
 - **Orchard.** Since NU6.3 no value can enter Orchard (ZIP 258), so a recent window holds no entry into it (the sample has
-  none) and NO MATCH for Orchard says nothing: an Orchard note was shielded before the window. `check` says so. Only data
+  none) and NO MATCH for Orchard says nothing: an Orchard note was shielded before the window. `check` says so for an unshield
+  with `--pool orchard` or `--pool any` (never for `--shield`, `--pool sapling` or `--pool ironwood`), and the web page says
+  so under the same conditions; `report` counts the NO MATCH unshields that left Orchard (section 1). Only data
   that reaches back before block 3,428,143 (88 days before the end of the sample) can hold an Orchard crowd: `sync --days N`
   and `check --lookback-days N` with a large enough N.
 - **The data is a snapshot.** `check` warns when the newest block is more than 2 hours old. A shield made after the newest
@@ -880,7 +938,10 @@ The web page and the release
   Browser extensions can read what you type. The strongest option is the command line tool, or the file opened offline in
   a private window with extensions off. It has no address input (`--to` is CLI only).
 - **Releases and CI are unproven.** Releases are drafts; this README gives no download instructions and makes no claim of
-  bit-for-bit reproducible builds. The workflows have never run on GitHub (section 14).
+  bit-for-bit reproducible builds. The workflows have never run on GitHub (section 14). What was run by hand, once, on
+  Linux x86_64 with the final code: `.github/scripts/release.sh` built the release binary, started it on the sample,
+  found that it links glibc, libm and libgcc_s only (SQLite is built in), packed it and found no path of the build
+  machine in the archive (docs/PRIVACY.md, R1). The macOS and Windows archives were not built.
 - **The dependency tree is large.** The Tor client brings it to 525 crate versions; the name scan in audit P5 looks for
   analytics, telemetry and update-check crates by name, which is not a review of the Tor code. `deny.toml` ignores two
   advisories, each with its reason, both reached only through the Tor client (an unmaintained proc-macro, and a timing
@@ -908,7 +969,8 @@ LIVE=1 bash tests/audit.sh      # also the live Tor leak check (real network, a 
   differs from `dd7f9ee` by one comment in `check.rs` and by `NOTES.md`.
 - The page: `node web/test/parity.mjs` compares the page with the Rust scoring on 1,008 cases (128 sample amounts, 20 rejected
   inputs and a synthetic edge suite; about a minute), and `web/test/headless.mjs` opens it in real browsers (section 13).
-- Setup for the headless test: `cd web/test && npm ci && npx playwright-core install chromium firefox webkit` once, then
+- Setup for the headless test, once, from the repository root: `(cd web/test && npm ci --ignore-scripts && npx --no-install playwright-core install chromium firefox webkit)`
+  (CI uses the same two commands, with `--with-deps` on its runners). Then
   `BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`. For `bash tests/audit.sh` (Chromium only) set
   `PLAYWRIGHT_CORE=<a playwright-core directory>`; `CHROMIUM=<binary>` names the browser.
 - The rule about when `check` says `shields after ...` has its own test, written to fail against the code before the rule
@@ -925,6 +987,13 @@ and audit P10 checks that the committed file is exactly what that builds. Open i
 It says on the page: "This page cannot send anything: its Content-Security-Policy blocks all network requests. Check
 DevTools > Network." It gives the same answers as the command line (parity test, section 12), has a "Pool your funds are in"
 menu (the default "Not sure" scores all three pools and shows the worst) and no address check; use the CLI for `--to`.
+In shield mode it scores only Sapling and Ironwood ("Not sure" then says "the worst of the two pools") and refuses
+Orchard with "A shield cannot go into Orchard: from NU6.3 on no value may enter that pool (ZIP 258). Choose Sapling,
+Ironwood or Not sure." and no verdict. For an unshield out of Orchard, or "Not sure", it prints the same kind of note as
+`check` when the sample holds no Orchard entry in the lookback window ("Note: Orchard has no entries at all in the
+lookback window of this sample, and none can arrive since NU6.3 (ZIP 258). ..."), and its suggested amounts follow
+the rule of `check` (section 5, item 4). The parity test compares the page's answers and notes with the command line,
+and the headless test checks the texts of the page (section 12).
 
 The Content-Security-Policy is a `<meta>` tag inside the file (section 3.1). It protects the copy you opened; a host that
 serves you a modified copy is the reason to compare the SHA-256 of section 3.1. When GitHub Pages serves it, the HTTP headers
@@ -936,18 +1005,23 @@ HEADLESS OK (chromium 154.0.8037.92, firefox 157.0, webkit 27.2; the server saw 
 ```
 
 Real Safari is NOT VERIFIED. A hosted copy is meant to appear at https://kylne700.github.io/zcrowd/ when `.github/workflows/pages.yml` has
-run (it publishes `web/index.html` and nothing else); it has not run yet, so that address is NOT VERIFIED.
+run (it publishes `web/index.html` and nothing else; every job has `contents: read`, only the deploy job also has
+`pages: write` and `id-token: write`); it has not run yet, so that address is NOT VERIFIED.
 
 ## 14. Dependencies, licence, roadmap
 
 Rust 2024 edition (1.90 or newer), `zcash_client_backend` (the lightwalletd protocol; its `tor` feature brings arti, the Rust
 Tor client: the tree went from 248 to 525 crate versions), `zcash_primitives`, `zcash_transparent` and `zcash_address`
 (transactions, ids, addresses), `tonic` with webpki roots (gRPC over TLS), `tokio`, `clap`, `serde_json`, `anyhow`,
-`rpassword` and `libc`. SQLite is bundled, so a C compiler is needed. `Cargo.lock` is committed. MIT, see `LICENSE`.
+`rpassword` and `libc`; the command-line crate also lists `zcash_address` and `zcash_protocol` as
+dev-dependencies, for its tests only. SQLite is bundled, so a C compiler is needed. `Cargo.lock` is committed. MIT, see `LICENSE`.
 
 CI (`.github/workflows/ci.yml`) builds and tests on Linux, macOS and Windows, runs a sandbox job, the whole e2e and audit
 on Linux, the page in three browsers and `cargo deny`; `release.yml` builds archives for Linux x86_64, macOS aarch64 and
-Windows x86_64 and only ever drafts a release. None of the workflows has run on GitHub yet.
+Windows x86_64 and only ever drafts a release. None of the workflows has run on GitHub yet. The three files were checked
+only by parsing them as YAML, and a script asserted the triggers, permissions, job layout and action pins of `pages.yml`.
+All 18 `uses:` lines in them name a full commit SHA, and `cargo-deny` 0.20.2 is downloaded from its release page and
+checked against a SHA-256 before it runs.
 
 Track: CORE & TOOLING. The library (`zcrowd-core`) and `--json` are for wallet and SDK authors. Roadmap, not built: a
 wallet-side hook that shows the verdict on the send screen.
@@ -984,12 +1058,16 @@ Sync, Tor and servers
   to hosts other than `zec.rocks` (one test timed out at the exit; `zec.rocks` itself was not shown to do that), and
   syncs from servers other than `zec.rocks`.
 - Independence of the public servers; packet-level behaviour of `sync`.
+- Syncing into data you already have: the merge of ranges that overlap or touch, and the replacement when they do not,
+  are read from `crates/zcrowd/src/sync.rs`; no test runs them (the replacement of data without a usable coverage file is
+  tested).
 - A range of 1,000 blocks or fewer from a server that serves no tree states can leave out a pool without being refused.
 
 Decoding and data
 
 - The Ironwood-only, second coinbase and Sapling to Ironwood move fixtures against an explorer; P2SH input-address detection beyond the sources seen in
-  the sample; a shield from a `--to` address that arrives after the sync (not simulated beyond what the test crafts).
+  the sample (a bare-multisig spend, `OP_0 <sig> <sig>`, would be read as a P2SH input and get a made-up t3 source address;
+  theoretical on mainnet, 0 cases in the sample, left as it is); a shield from a `--to` address that arrives after the sync (not simulated beyond what the test crafts).
 - The low-confidence note on real data and in a browser: none of the sample's low-confidence events is a shield or a move.
 - That no value can enter Orchard after NU6.3 on the consensus side: it is inferred from ZIP 258 and from the sample, which
   has no shield or move into Orchard.

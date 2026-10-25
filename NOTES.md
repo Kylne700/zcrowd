@@ -463,7 +463,8 @@ it with the Rust output wherever the case is reachable):
   (worst) verdict was NO MATCH or RED; but GREEN outranks NO MATCH, so with one pool GREEN and another NO MATCH or RED the
   caveat of the pool that rests on a missing entry never showed. Now it is printed when any pool shown rests on it, except
   Orchard (later blocks cannot add to it). Test `under_any_the_missing_shields_line_follows_every_pool_shown_except_orchard`
-  (failed before); page: `restsOnMissing`, compared on every parity comparison, text asserted in `headless.mjs`.
+  (failed before); page: `restsOnMissing`, compared on every parity comparison, text asserted in `headless.mjs`. S9g adds a
+  third case (an address that is still open) and gives the complete rule: see N1 in the code freeze stage below.
 - **F2, suggestions under `any` were scored in one pool (7193227).** `check --unshield 1.23456789` offered `1.25000000 ZEC ->
   crowd 723 (weighted 539.5, GREEN)` while checking 1.25 gave crowd 96 (weighted 70.0): the suggestion was weighed in Ironwood
   (the pool that was worst for the typed amount), the answer for 1.25 comes from Sapling (the worst pool for that amount). `suggest::popular` now takes the pools the check weighs and judges
@@ -733,6 +734,149 @@ the sandbox stage added.
 Not run: the Windows build and tests, a cold 30-day sync of the final code, and the F8 h sentence in a browser; see the S9e
 bullet of the NOT VERIFIED list below.
 
+## Code freeze stage (S9g)
+
+Master is S9e's tip c5fb06a plus the items below, one commit each (and a comment-only commit after the first). From here on the
+code is frozen: the docs stage, the demo video and the publish gate build on this tip. Against c5fb06a only
+`crates/zcrowd/src/check.rs`, `crates/zcrowd/tests/cli.rs`, the new `.github/workflows/pages.yml` and this file differ. The sample,
+its events and `web/index.html` are byte-identical to S9e's, so no number or example of the stages above changed; only the
+final-run numbers below are new.
+
+- **N1 of the third independent review: an address that is still open gave no "shields after ... are not counted" line (2ed0a4f;
+  824e651 only rewords its comment).** `check --unshield --to ADDRESS` with an address that is clear (NO MATCH) or was only the
+  destination of earlier unshields (AMBER) printed no such line on the address's account, although such an address turns RED if a
+  shield from it comes after the newest block. The rule looked at the crowds only, and Orchard's exemption (nothing can enter
+  Orchard since NU6.3, so later blocks cannot change its crowd) dropped it for `--pool orchard` too; but the address check looks
+  at shields into any pool. `check.rs` now also prints the line when `--to` is given and its finding is clear or AMBER
+  (`addr_open`), in every pool, Orchard included; a shield source is RED for good and adds nothing. The complete rule, which
+  replaces those of S3-1 and F1 above: the line (after `verdict:` and `amount:`; in `--json` among the `notes`) is printed when
+  (a) a pool the check shows is NO MATCH or RED, Orchard excepted (every pool under `any`, the chosen one otherwise); or (b) the
+  overall verdict is NO MATCH or RED and the pool of the `crowd:` line is not Orchard (so a RED address prints it under every pool
+  but Orchard, which `no_match_and_red_say_that_shields_after_the_last_block_are_not_counted` pins); or (c) `--to` is given and
+  its finding is clear or AMBER. `--shield --to` is refused, so shield mode cannot have the case.
+  Test `an_address_that_is_not_a_shield_source_says_that_shields_after_the_last_block_are_not_counted` (cli): 12 shields into
+  Sapling and 12 into Ironwood, none into Orchard (GREEN, GREEN, NO MATCH), a month of data whose newest block is 10 minutes old
+  (so no warning could explain the line); `--pool any`, `sapling`, `orchard`, `ironwood` x a clear and an AMBER address x text and
+  `--json`: the exact `verdict:` line, the new line once and after it, no `warning:` line or note, the address never echoed; also
+  a RED address under Orchard (no line), no `--to` under Sapling (no line) and the refusal of `--shield --to`. It failed on c5fb06a
+  (`--pool any, address NO MATCH`) and passes now; three mutants of `check.rs` fail it (`addr.is_some()`: the RED address under
+  Orchard; the address term inside Orchard's exemption: `--pool orchard, address NO MATCH`; `Clear` without AMBER: `--pool any,
+  address AMBER`).
+  On the committed sample 172 `check` outputs (4 pools x 5 amounts x text and `--json`, each without `--to` and with a clear, an
+  AMBER and a RED address, plus `--shield` and its refusals) were captured with the old and the new binary: 44 gain exactly that
+  one line (22 for a clear and 22 for an AMBER address, half of them `--json`; the other 18 + 18 had it already because of a
+  pool's crowd), the other 128 are identical. The
+  page has no address input (its note: "Not covered: address reuse (use the command line tool with --to)"), so it needs no
+  change: `web/index.html` is untouched (835,793 bytes; `node web/build.mjs` rebuilds the same file), `parity.mjs` never passes
+  `--to`, and its A10 line is as before.
+- **Pages workflow (d2f6ea9).** `.github/workflows/pages.yml` publishes `web/index.html` alone to GitHub Pages, on a push to
+  `master` and on "Run workflow". Job `build` copies the file into a directory it creates empty (`mkdir`, no `-p`) and uploads that
+  directory with `actions/upload-pages-artifact`; job `deploy` (`environment: github-pages`) runs `actions/deploy-pages`.
+  Permissions: `contents: read` at the top and in `build`; `pages: write` and `id-token: write` only in `deploy`. The three
+  actions are pinned to commit SHAs with the tag in a comment, like `ci.yml` (checkout v7.0.1 is the pin `ci.yml` has;
+  upload-pages-artifact v5.0.0 and deploy-pages v5.0.1 were looked up on 2026-10-25 through the GitHub API, `git/ref/tags/<tag>`,
+  each tag pointing at a commit). All three workflow files parse (PyYAML `safe_load`) and a script asserted the triggers,
+  permissions, job layout and pins. **It has not run:** a person must set Settings > Pages > Source to "GitHub Actions" once (a
+  Free plan also needs a public repository), and the environment `github-pages` must allow `master`; until then the `deploy` job
+  fails on every push. NOT VERIFIED.
+- **Left as they are: N2 and N3 of the third review (documented limits, no code change).** The seccomp filter does not stop the
+  same-user routes `ptrace`, `process_vm_readv`/`process_vm_writev`, `pidfd_open`/`pidfd_getfd` and `/proc/<pid>/mem` (N2), nor
+  `ioctl(TIOCSTI)` (N3). The reason S4-9 above gives for calling this theoretical (Yama `ptrace_scope` 1, "the Ubuntu default") is
+  true on Ubuntu only: on this Debian 13 host (kernel 6.12.111) `kernel.yama.ptrace_scope` is 0 and `dev.tty.legacy_tiocsti` is 0
+  (both read in this stage; no ptrace or TIOCSTI test was run). The sandbox is defence in depth against our own process doing
+  network I/O, not against another process of the same user; the docs have to say on which hosts that holds.
+
+### Final run (S9g)
+
+The code is that of 2ed0a4f and the workflow file of d2f6ea9. The one commit after them, 824e651, rewords a comment in `check.rs`;
+after it `cargo fmt --check`, a cold `cargo clippy`, `cargo test` (twice), the 1.90 check and `bash tests/e2e.sh` ran again (second
+list), and the commit after that changes NOTES.md only. 2026-10-25, debug profile, load average 1 to 4,
+`PLAYWRIGHT_CORE=<playwright-core dir>`, one command after the other, `/` had 16 to 20 GB and `/tmp` 16 GB free throughout (the
+stop line was 3 GB). The sample was already more than 2 h old, so every `check` on it printed the stale-data warning. Every command
+ended with exit 0.
+
+First list, on d2f6ea9 (02:33 to 02:50 UTC):
+
+- `cargo fmt --check`: no output.
+- `cargo clippy --all-targets -- -D warnings`, twice: once with all sources touched and once after `cargo clean -p zcrowd -p
+  zcrowd-core` (4.4 GiB removed; both crates "Checking", no warning). 1 s each.
+- `cargo test`, twice in a row: 140 tests passed, 0 failed, both times (21 s with a rebuild, 16 s; 139 in S9e). By binary: 11
+  (`zcrowd` unit) + 30 (`cli`) + 2 (`stop`) + 4 (`tor`) + 33 (`zcrowd-core` unit) + 21 (`decode`) + 21 (`ingest`) + 4 (`meta`) +
+  10 (`pool`) + 4 (`sample`); 0 doc tests.
+- `cargo +1.90.0 check --workspace --all-targets --locked` (the `rust-version`, offline): 1 s (the dependencies were already built
+  with 1.90 by earlier runs; both workspace crates were checked).
+- `bash tests/e2e.sh`: `E2E OK`, 123 s, 30 `ok` lines and its own `skip  LIVE=1 not set`; inside it `AUDIT OK (1 check(s) skipped
+  and NOT VERIFIED ...)`, the one skipped check being T3/T4/T6 (the live Tor leak check).
+- `bash tests/audit.sh` alone: `AUDIT OK`, 98 s, 22 `ok` lines, the same one SKIP.
+- `LIVE=1 bash tests/audit.sh` alone: `AUDIT OK`, 236 s, 23 `ok` lines, no SKIP. Its T3/T4/T6 line: lookups of any name 0, of the
+  server name 0, connects to server IPs 0, port-53 sends 0, 5 distinct connect destinations (Tor relays); through Tor the tip,
+  every block and 20 transactions; 6 files, all arti directory data, guard state or locks, none mentions the server name.
+- `LIVE=1 bash tests/e2e.sh`: `E2E OK`, 470 s, all 34 lines below.
+- `node web/test/parity.mjs`, 71 s: `PARITY OK: 1008 JS-vs-Rust comparisons (128 sample amounts, 20 rejected inputs, synthetic
+  edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (3 sample and 39 synthetic
+  comparisons with a time tie)`, the A10 line as in S9e.
+- `BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`, 15 s: `HEADLESS OK (chromium 154.0.8037.92, firefox 157.0,
+  webkit 27.2; the server saw 3 page loads and nothing else)`.
+- The three workflow files (`ci.yml`, `pages.yml`, `release.yml`) parse (PyYAML `safe_load`).
+- The privacy scan of the repository over all branches (counts, run on d2f6ea9): 0 tree files and 0 history lines with a
+  personal-string hit, 0 mail addresses in files, 0 home paths in files and history, 0 key-like files, 0 placeholder files, 0 hits
+  in the HEAD message; one author and committer (the neutral address; 95 commits over all branches); the only mail domains in
+  history are that address's and the `noreply` trailer's.
+
+Second list, on 824e651 (02:51 to 02:54 UTC), after that comment commit: `cargo fmt --check` (no output), `cargo clippy
+--all-targets -- -D warnings` (once touched, once cold after `cargo clean -p`: 4.3 GiB removed, both crates "Checking", no warning;
+1 s each), `cargo test` twice (140 passed, 0 failed, both times; 21 s and 16 s), `cargo +1.90.0 check --workspace --all-targets
+--locked` (1 s), the workflow files parse, and `bash tests/e2e.sh`: `E2E OK`, 126 s, the lines of the offline run above except the
+P11 line (91 commits).
+
+Real output of `PLAYWRIGHT_CORE=<playwright-core dir> LIVE=1 bash tests/e2e.sh` (it runs `tests/audit.sh` with the same `LIVE=1`)
+on d2f6ea9, all 34 lines, nothing removed or condensed; exit code 0, 470 s in all (network: the live one-day sync and the Tor leak
+check):
+
+```
+ok    cargo fmt --check
+ok    cargo clippy --all-targets -D warnings
+ok    cargo test: 140 tests passed, 0 failed
+ok    offline sync from fixtures: 3 events, range ends at tip-10 (3522630), 3 of 3 txids recomputed, 0 mismatches
+ok    check: one verdict line and one crowd line each time, a line per pool; 1.0 GREEN (ironwood k=160); 1.2497 k=157 weighted=114.5 GREEN (text and --json); --pool; 125 ZEC Sapling k=32 vs Ironwood NO MATCH; the Ironwood-only round trip is found; 3.73 k=1 RED; --to a shield source address RED (text and --json overall verdict)
+ok    report on the committed sample: 17739 unshields in the last 14 days = NO MATCH 3695 (20.8%), RED 1412 (8.0%), as the README says
+ok    verify of a fixture transaction: MATCH (decoded from the cached raw bytes, offline)
+ok    example five_lines prints: crowd 591 -> GREEN
+ok    LIVE one-day sync: transaction id recomputed from the raw bytes for 2101 of 2101 candidates, 0 did not match (dropped); block hash chain checked over 1297 blocks
+ok    build
+ok    P1 sync requests depend only on the block range (test sync_requests_depend_only_on_range)
+ok    P2 check, report and verify run with the network removed from outside (unshare -rn)
+ok    P2 check.rs, report.rs and verify.rs import no network code (no source, tonic, tokio, std::net, Lwd, sockets)
+ok    P2 the process cuts its own network: a loopback connection works before and fails after (test sandbox_blocks_connections)
+ok    P2 the seccomp filter refuses TCP, UDP, Unix sockets, socketpair, io_uring and other ABIs, through enter() and alone (tests sandbox::tests::*)
+ok    P2 check, report and verify each install the seccomp filter before they read their data (test check_report_and_verify_each_install_the_seccomp_filter_before_they_read_anything)
+ok    P3 only ingest.rs (raw cache), model.rs (the flows files, called by sync only), report.rs (report), sync.rs (lock file) and source.rs (Tor state directory, sync only) write files; check.rs and verify.rs cannot
+ok    P3 random address and amount typed via stdin and arguments: not in any file, no file created, neither echoed in the output (text, --json, --shield, arguments)
+ok    P4 no mnemonic, seed, viewing-key or ufvk anywhere in crates/
+ok    P5 525 crate versions in cargo tree (624 packages in Cargo.lock), none of reqwest, sentry, posthog, segment, openssl, native-tls, analytics, telemetry, update; Cargo.lock tracked
+ok    P6 sync --server http://... is refused before any connection (run with the network removed)
+ok    P6 a local TLS server with a self-signed certificate is rejected (invalid peer certificate: UnknownIssuer)
+ok    P7 flows file keys, cache file names and the directory listing contain only public chain fields
+ok    P8 wrong txid dropped and counted, broken prevHash and gaps are errors (tests wrong_or_broken_transactions_are_dropped_counted_and_never_cached, broken_block_chain_is_an_error, block_chain_is_checked_across_request_chunks)
+ok    P9 report HTML has no src, href, url(), http(s), @import or script
+ok    P10 web/index.html: CSP with connect-src, form-action, base-uri none; no external reference; no network, storage or navigation API in its script; no <form>
+ok    P10 PARITY OK: 1008 JS-vs-Rust comparisons (128 sample amounts, 20 rejected inputs, synthetic edge suite); identical pool, k, weighted, verdict, pools, suggestions and ordered match txids (3 sample and 39 synthetic comparisons with a time tie)
+ok    P10 web/index.html equals what web/build.mjs builds from the template and the committed sample
+ok    P10 headless Chromium: zero requests while typing, CSP blocks injected fetch, image, beacon, WebSocket and form (http:// and file://)
+ok    P11 no home path, mail address or personal string in tracked or untracked files; 90 commits, one neutral identity; no remote but the project's own; data/ and target/ ignored
+ok    T1/T2/T5/T7 empty network namespace: the default sync fails loudly (names --no-tor), looks up no server name, resolves no name locally, writes no output; --no-tor is the control the shim sees; also flag conflicts, plain-text URL refused before Tor starts, --end-height reorg margin (crates/zcrowd/tests/tor.rs)
+ok    T3/T4/T6 lookups (any name)=0, lookups of the server name=0, connects to server IPs=0, port-53 sends=0, distinct connect destinations (Tor relays)=7; through Tor: the tip, every block and 20 transactions; 6 files, all arti directory data, guard state or locks; 0 mention the server name
+AUDIT OK
+E2E OK
+```
+
+`diff` against the same run of S9e above shows four lines that differ: the test count (140, was 139); the live one-day sync (2101
+candidates in the same 1297 blocks; 2087 before; it differs run to run); the P11 line (90 commits, was 84); the T3/T4/T6 line (7
+relays, was 9; it differs run to run).
+
+Not run: the Windows build and tests, any run on GitHub (CI and Pages), a cold 30-day sync of the final code, the F8 h sentence in a
+browser, and any ptrace or TIOCSTI test; see the S9g bullet of the NOT VERIFIED list below.
+
 ## Deviations from the first design (and why)
 
 1. `--unshield 1.23456789` prints NO MATCH plus the odd-amount note, not RED (the first design said RED; the privacy spec made odd amounts a
@@ -805,7 +949,8 @@ added the project's own private GitHub remote `origin`. The agents never push, a
     lines, JSON `pools` of length 2) and `--shield --pool orchard` is refused; under `any` the "shields after ... are not counted"
     line follows every pool shown that rests on a missing entry, except Orchard; a suggestion is judged by the worst of the pools
     the check weighs; an empty Orchard crowd gets a note (text, JSON, report, page). Everything else of A11 (the events, the crowd, the
-    order RED > AMBER > GREEN > NO MATCH, the A10 lines `verdict:` and `crowd:`) is as before.
+    order RED > AMBER > GREEN > NO MATCH, the A10 lines `verdict:` and `crowd:`) is as before. S9g (N1) adds a third case to that
+    line, an address that is still open under `--to`: see the code freeze stage above.
 
 ## NOT VERIFIED
 
@@ -841,10 +986,20 @@ added the project's own private GitHub remote `origin`. The agents never push, a
   the check); a cold 30-day sync of the final code over Tor (the refresh took 236 s with a warm cache); the F8 h line in a
   browser and on the real sample (the sample has no low-confidence shield or move; `parity.mjs` compares the page's count with the
   CLI's, no headless test reaches the sentence).
+- S9g: `.github/workflows/pages.yml` has never run on GitHub (the YAML parses and its structure was asserted; whether
+  `deploy-pages` accepts the artifact, whether the `github-pages` environment lets `master` through, and the page as GitHub serves it
+  stay unchecked until Pages is switched on); N2 and N3 as the review states them (only the two host settings were read, no ptrace or
+  TIOCSTI test); the Windows, macOS and GitHub items of S9d and S9e stand.
 
 ## Open problems and hand-over
 
-- `web/index.html` needs hosting (publishing is the lead's job). README and PRIVACY.md say nothing about a URL.
+- `web/index.html` needs hosting (publishing is the lead's job; S9g added `pages.yml`, which does it once Pages is switched on, see
+  below). README and PRIVACY.md say nothing about a URL.
+- Pages is not switched on (S9g): after Settings > Pages > Source = "GitHub Actions" (and a public repository on a Free plan) the
+  first push to `master`, or "Run workflow", deploys `web/index.html`; the environment `github-pages` must allow `master`. `pages.yml`
+  names `master` only (`ci.yml` also names `main`).
+- N2 and N3 of the third review stay as documented limits (see the S9g stage): same-user ptrace and friends, and TIOCSTI, are not
+  filtered, and the Yama setting that made them theoretical is Ubuntu's, not Debian's.
 - Tor is merged (arti, inside the process; `--no-tor` goes direct): README section 7 and docs/PRIVACY.md T1..T7 describe
   it. The bulk 30-day sync of the Ironwood stage used `--no-tor` on purpose (the lead allowed it); the review-fix stage
   timed Tor syncs of one and of 30 days (see "Measured sync times").

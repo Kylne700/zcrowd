@@ -5,13 +5,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const BIN: &str = env!("CARGO_BIN_EXE_zcrowd");
 const T: u64 = 1_790_000_000;
 
-fn line_in(kind: &str, pool: &str, zat: u64, i: u64, extra: &str) -> String {
+/// An event at time `t`, for data whose newest block is minutes old (`line_in` puts its events around `T`).
+fn line_at(kind: &str, pool: &str, zat: u64, i: u64, t: u64, extra: &str) -> String {
     let n_tin = u8::from(kind != "move"); // a move has no transparent input
     format!(
-        r#"{{"h":{},"t":{},"kind":"{kind}","zat":{zat},"pool":"{pool}","fee_zat":null,"n_tin":{n_tin},"n_tout":0,"txid":"{i:064x}","confidence":"high"{extra}}}"#,
-        3_500_000 + i,
-        T - 100 * i
+        r#"{{"h":{},"t":{t},"kind":"{kind}","zat":{zat},"pool":"{pool}","fee_zat":null,"n_tin":{n_tin},"n_tout":0,"txid":"{i:064x}","confidence":"high"{extra}}}"#,
+        3_500_000 + i
     )
+}
+
+fn line_in(kind: &str, pool: &str, zat: u64, i: u64, extra: &str) -> String {
+    line_at(kind, pool, zat, i, T - 100 * i, extra)
 }
 
 fn line(kind: &str, zat: u64, i: u64, extra: &str) -> String {
@@ -929,6 +933,63 @@ fn no_match_and_red_say_that_shields_after_the_last_block_are_not_counted() {
     let j: serde_json::Value = serde_json::from_str(&check(&none, "--unshield", "1.0", &["--json"])).unwrap();
     let notes: Vec<&str> = j["notes"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
     assert!(notes.contains(&line_after.trim()), "{j}");
+}
+
+// NOTES S9g, N1 of the third review: the address finding had no such line. An address found nowhere ("clear", NO MATCH) or only as
+// the destination of earlier unshields (AMBER) turns RED if a shield from it comes after the newest block, however fresh the data
+// is and in every pool, Orchard too: ZIP 258 closes Orchard to new value, not the address check. A shield source (RED) is final.
+#[test]
+fn an_address_that_is_not_a_shield_source_says_that_shields_after_the_last_block_are_not_counted() {
+    let last_t = wall() - 600; // newest block 10 minutes old and a month of data: no stale or short-window warning to blame
+    let (clear, used) = ("t1XQZdZMnzXBcL8yx2PR27dSNrqctgwLgux", "t1Sr1dKZJGxoMcxsUcK6a5RZofaJi8UWHxF");
+    let line_after = format!("shields after {} (last synced block) are not counted", zcrowd_core::model::fmt_utc(last_t));
+    // 12 shields of 1.2345 ZEC into Sapling and 12 into Ironwood, none into Orchard: GREEN in both, NO MATCH in Orchard
+    let crowd: Vec<String> =
+        (1..=24).map(|i| line_at("shield", if i <= 12 { "sapling" } else { "ironwood" }, 123_450_000, i, last_t - 100 * i, "")).collect();
+    let file = |name: &str, extra: Option<String>| {
+        let lines: Vec<String> = crowd.iter().cloned().chain(extra).collect();
+        data_file_meta(name, &lines, Some(&meta_at(last_t, 31 * 86_400)))
+    };
+    let d_clear = file("cli-addr-end1.ndjson", None);
+    let d_used =
+        file("cli-addr-end2.ndjson", Some(line_at("unshield", "sapling", 50_000_000, 30, last_t - 3000, &format!(r#","dst":["{used}"]"#))));
+    let d_src =
+        file("cli-addr-end3.ndjson", Some(line_at("shield", "sapling", 500_000_000, 31, last_t - 3100, &format!(r#","src":["{clear}"]"#))));
+    let go = |d: &std::path::Path, pool: &str, who: &str, json: bool| {
+        let mut args = vec!["check", "--unshield", "-", "--to", "-", "--pool", pool, "--data", d.to_str().unwrap()];
+        args.extend(json.then_some("--json"));
+        let (ok, out, err) = run(&args, Some(&format!("1.2345\n{who}\n")));
+        assert!(ok, "{err}");
+        out
+    };
+    let rank = |v: &str| ["NO MATCH", "GREEN", "AMBER", "RED"].iter().position(|x| *x == v).unwrap();
+    for (pool, amount) in [("any", "GREEN"), ("sapling", "GREEN"), ("orchard", "NO MATCH"), ("ironwood", "GREEN")] {
+        for (d, who, address) in [(&d_clear, clear, "NO MATCH"), (&d_used, used, "AMBER")] {
+            let overall = if rank(address) > rank(amount) { address } else { amount };
+            let want = format!("verdict: {overall} (worst of amount {amount} and address {address})");
+            let out = go(d, pool, who, false);
+            contract(&out);
+            let at = |l: &str| out.lines().position(|x| x == l || x.starts_with(l));
+            assert!(at(&want).is_some() && at(&want) < at(&line_after), "--pool {pool}, address {address}: {out}");
+            assert_eq!(out.lines().filter(|l| *l == line_after).count(), 1, "--pool {pool}, address {address}: {out}");
+            assert!(!out.contains("warning:") && !out.contains(who), "{out}");
+            // --json: once among the notes, and no warning among them either
+            let j: serde_json::Value = serde_json::from_str(&go(d, pool, who, true)).unwrap();
+            let notes: Vec<&str> = j["notes"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+            assert_eq!(notes.iter().filter(|n| **n == line_after).count(), 1, "--pool {pool}, address {address}: {j}");
+            assert!(!notes.iter().any(|n| n.starts_with("warning:")), "{j}");
+        }
+    }
+    // it is the address that adds the line: the same data and amount without --to are GREEN in Sapling and say nothing
+    let (ok, out, _) = run(&["check", "--unshield", "-", "--pool", "sapling", "--data", d_clear.to_str().unwrap()], Some("1.2345\n"));
+    assert!(ok && out.contains("verdict: GREEN") && !out.contains("(last synced block)"), "{out}");
+    // a shield source is RED and final: no shield later can undo it, and under Orchard nothing else rests on missing data
+    let out = go(&d_src, "orchard", clear, false);
+    assert!(out.contains("verdict: RED (worst of amount NO MATCH and address RED)") && !out.contains("(last synced block)"), "{out}");
+    // --to belongs to --unshield
+    let (ok, out, err) =
+        run(&["check", "--shield", "-", "--to", "-", "--data", d_clear.to_str().unwrap()], Some(&format!("1.2345\n{clear}\n")));
+    assert!(!ok && out.is_empty() && err.contains("--to applies to --unshield") && !err.contains(clear), "{out}{err}");
 }
 
 #[test]

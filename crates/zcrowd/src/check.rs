@@ -148,8 +148,13 @@ pub fn run(a: Args) -> Result<()> {
     // so later blocks cannot change its crowd.
     // shortcut: data that ends before NU6.3 is not special-cased, Orchard is left out of this line for it too.
     let rests_on_missing = |v: Verdict, pool: Pool| pool != Pool::Orchard && matches!(v, Verdict::NoMatch | Verdict::Red);
+    // The address finding rests on finding nothing too: an address that is clear, or only the destination of earlier unshields
+    // (AMBER), turns RED if a shield from it comes after the last block. That holds in every pool, Orchard included, because the
+    // check looks at shields into any pool, not at the crowd (NOTES S9g, research/52 N1). A shield source is RED for good.
+    // The page has no `--to`, so its `restsOnMissing` needs no address term.
+    let addr_open = addr.as_ref().is_some_and(|f| !matches!(f, AddrFinding::ShieldSource { .. }));
     let shown = if a.pool == PoolArg::Any { &crowds[..] } else { std::slice::from_ref(c) };
-    let after_end = (shown.iter().any(|o| rests_on_missing(o.verdict, o.pool)) || rests_on_missing(overall, c.pool))
+    let after_end = (addr_open || shown.iter().any(|o| rests_on_missing(o.verdict, o.pool)) || rests_on_missing(overall, c.pool))
         .then(|| format!("shields after {} (last synced block) are not counted", fmt_utc(cov.last_t)));
 
     // Nothing has been able to enter Orchard since NU6.3 (ZIP 258), so when the data holds no Orchard entry at all, an Orchard

@@ -671,6 +671,12 @@ command after the other, 2026-10-25. Every command ended with exit 0:
 - `BROWSERS=chromium,firefox,webkit node web/test/headless.mjs`, 15 s: `HEADLESS OK (chromium 154.0.8037.92, firefox 157.0,
   webkit 27.2; the server saw 3 page loads and nothing else)`.
 - Both workflow files (`ci.yml`, `release.yml`) parse (PyYAML `safe_load`).
+- After 2026-10-25 02:05:25 UTC, when the sample is more than 2 h old and every `check` on it prints the stale-data warning
+  (``warning: the newest block in this data is 2.0 h old; shields since 2026-10-25 00:05 UTC are not counted (run `zcrowd sync`)``),
+  `cargo test` (139 passed), `bash tests/e2e.sh` (`E2E OK`, 123 s), `node web/test/parity.mjs` (`PARITY OK`, same line) and
+  `node web/test/headless.mjs` (`HEADLESS OK`, same line) ran again on the NOTES commit before this one (26e4132) and passed;
+  the e2e output differs from the earlier run in the P11 commit count only. So nothing in the tests depends on the sample being
+  fresh.
 - The privacy scan of the repository over all branches (counts, run on 07043d0): 0 tree files and 0 history lines with a
   personal-string hit, 0 mail addresses in files, 0 home paths in files and history, 0 key-like files, 0 hits in the HEAD
   message; one author and committer (the neutral address; 90 commits over all branches); the only mail domains in history are

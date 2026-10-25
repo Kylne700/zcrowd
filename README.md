@@ -343,7 +343,7 @@ When 40 s pass without a `sync:` line, a status line says the sync is alive, for
 that line is only seen in a unit test (NOT VERIFIED live). `pools:` counts, per pool, the blocks since NU6.3 that hold
 data of that pool, and `tree check:` compares how many note commitments the server's own tree states say were added
 between the first and the last block with what its blocks hold, per pool: a server that leaves a pool out of its blocks
-is refused (section 9). `excluded:` lists what was left out: the 152 multi-pool events are kept in the file as low confidence and never counted in a
+is refused (section 9). A server that serves no tree states gets, in place of that line, `tree check: none, the server serves no tree states (a pool with no data in more than 1000 blocks from NU6.3 on is refused instead)` (the text is read from `sync.rs`; no run of this README printed it). `excluded:` lists what was left out: the 152 multi-pool events are kept in the file as low confidence and never counted in a
 crowd, and the skipped transactions are the counts of the `skipped:` line `check` prints. A transaction whose books
 do not close (transparent in plus value balances must equal transparent out plus fee, fee at least 0) is skipped and
 counted, never clamped; a reason that could hide a shield or an unshield (`conservation_fails`, `sprout_value`,
@@ -353,12 +353,15 @@ so the skipped counts can over-report, never under-report.
 Stop and resume. Ctrl-C or SIGTERM stops a sync with `sync: stopped by SIGINT. <out> is as it was, and the transactions already fetched are kept in <out dir>/tx: run the same command again to go on.`
 (exit status 130 or 143); the same command then goes on from `tx/`. A block stream that breaks in the middle of a range
 is opened again after the last block received, with the hash chain checked across the join (at most 5 failed attempts
-in a row and 20 in all, and 60 s without data counts as a failure). The files are written crash-safe: the events file is
-renamed first and `flows.meta.json` (the coverage file) last, so an interrupted save leaves the old pair or a clear
-refusal (`no coverage file next to the data (an interrupted sync?): run `zcrowd sync` again`); a second sync on the same
-`--out` stops with `another zcrowd sync is already writing <out> (lock file <path>): wait for it to finish`; data from
-another zcrowd version (`FORMAT_VERSION` 2) is refused with `run `zcrowd sync` again`; a damaged line is reported
-with its line number (`Error: cannot read <file>`, then `line 4, column 17: EOF while parsing a value`).
+in a row and 20 in all, and 60 s without data counts as a failure). The files are written crash-safe: both are first written
+whole to `flows.tmp` and `flows.meta.tmp` (the names for the default `--out`), the old coverage file `flows.meta.json` is
+removed, then the events file is renamed into place and the new coverage file last, so an interrupted save leaves the old
+pair or a clear refusal (``no coverage file next to the data (an interrupted sync?): run `zcrowd sync` again``; the tests are
+`a_save_that_fails_before_the_events_are_replaced_keeps_the_old_pair` and `a_save_that_stops_between_the_two_renames_leaves_no_window_to_trust`). A second sync on the same `--out` stops with
+`another zcrowd sync is already writing <out> (lock file <path>): wait for it to finish` (the lock is held on the empty
+file `flows.lock`, which stays on disk and is released when the process ends, even if it is killed). Data from another
+zcrowd version (`FORMAT_VERSION` 2) is refused by `check`, `report` and `verify` with ``run `zcrowd sync` again`` (tests `check_and_report_refuse_data_without_this_format_version`, and for `verify` the last assert of `verify_reads_the_id_from_stdin_notes_one_in_the_arguments_and_advises_spot_checks`); a damaged line is reported with its line
+number (`Error: cannot read <file>`, then `line 4, column 17: EOF while parsing a value`).
 
 Syncing into data you already have. If `--out` holds data of this version and the new block range overlaps it or touches it
 (the first block of one follows the last of the other), the two are merged: events inside the new range are replaced, older

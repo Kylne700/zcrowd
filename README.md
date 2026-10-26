@@ -31,9 +31,9 @@ web page. It computes only what any chain observer can already compute, for your
 | Privacy | `sha256sum web/index.html` (compare with section 3.1)<br>`bash tests/audit.sh` (the checks of P1 to P11 and T1, T2, T5, T7 in `docs/PRIVACY.md`: 21 `ok` lines offline, 22 with the browser test of section 12)<br>`BROWSERS=chromium,firefox,webkit node web/test/headless.mjs` (0 requests while typing; setup in section 12) | Opened from GitHub Pages the page shows GitHub your IP address, and a browser extension can read what you type; real Safari is NOT VERIFIED. `sync` is the only command that uses the network: over Tor by default, and the server still sees the block range you ask for (section 11). The live Tor leak check of the audit runs only with `LIVE=1`. |
 | Usefulness | the [live page](https://kylne700.github.io/zcrowd/)<br>`printf '1.0\n' \| zcrowd check --unshield - --data fixtures/flows-sample.ndjson` (section 2, no network; without Rust: the [v0.1.0 binaries](https://github.com/Kylne700/zcrowd/releases/tag/v0.1.0))<br>`zcrowd report --data fixtures/flows-sample.ndjson` (the figures of section 1) | No wallet hook yet (roadmap, section 14): you run it before you send. Fresh data over Tor is slow: one day took 156 s to 866 s, a cold 30 days 2 h 25 min on an earlier build (section 4). The page and the quick start run on a frozen sample. |
 | Execution | `bash tests/e2e.sh` (formatting, lints, 140 tests, the command line on the fixtures, then the audit)<br>`cargo build -p zcrowd && node web/test/parity.mjs` (the page against the Rust scoring on 1,008 cases)<br>[CI run 40238031649](https://github.com/Kylne700/zcrowd/actions/runs/40238031649) (9 jobs on Linux, macOS and Windows, on `d576004`, the page with its grammar fix) | Linux is the tested platform. macOS and Windows ran in CI only, on no real machine, and ran no `sync`. The tests under Rust 1.90 are NOT VERIFIED. |
-| Originality | `git log --max-parents=0 --format='%h %aI %s'` (the root commit, below)<br>section 10: what is credited and what differs<br>`cargo run -q --release -p zcrowd-core --example five_lines` (the library, section 7)<br>the `--to` example of section 6 (address reuse) | The idea of matching amounts is not new: section 10 credits Quesnelle (2017) and Kappos et al. (2018). |
+| Originality | `TZ=UTC git log --max-parents=0 --date=iso-strict-local --format='%h %ad %s'` (the root commit, below)<br>section 10: what is credited and what differs<br>`cargo run -q --release -p zcrowd-core --example five_lines` (the library, section 7)<br>the `--to` example of section 6 (address reuse) | The idea of matching amounts is not new: section 10 credits Quesnelle (2017) and Kappos et al. (2018). |
 
-Build window: the contest opened submissions on 2026-09-28 and closes them on 2026-10-28 at 23:59 UTC (thezecathon.com, Schedule). Work on zcrowd began on 2026-10-24, the day of the one root commit, which the command in the Originality row prints: `14b7498 2026-10-24T15:43:56+03:00 S1: workspace, lightwalletd source, candidate crawl, scoring core` (12:43 UTC). Git dates are set by whoever commits; GitHub's own record (`created_at` in https://api.github.com/repos/Kylne700/zcrowd) has the repository created on 2026-10-24 at 16:50 UTC.
+Build window: the contest opened submissions on 2026-09-28 and closes them on 2026-10-28 at 23:59 UTC (thezecathon.com, Schedule). Work on zcrowd began on 2026-10-24, the day of the one root commit, which the command in the Originality row prints: `14b7498 2026-10-24T12:43:56Z S1: workspace, lightwalletd source, candidate crawl, scoring core` (12:43 UTC). Git dates are set by whoever commits; GitHub's own record (`created_at` in https://api.github.com/repos/Kylne700/zcrowd) has the repository created on 2026-10-24 at 16:50 UTC.
 
 1. [The leak](#1-the-leak)
 2. [Quick start](#2-quick-start-bundled-sample-no-network)
@@ -988,9 +988,12 @@ The web page and the release
   started it on the sample, found that it links glibc, libm and libgcc_s only (SQLite is built in), packed it and found no
   path of the build machine in the archive (docs/PRIVACY.md, R1).
 - **The dependency tree is large.** The Tor client brings it to 525 crate versions; the name scan in audit P5 looks for
-  analytics, telemetry and update-check crates by name, which is not a review of the Tor code. `deny.toml` ignores two
-  advisories, each with its reason, both reached only through the Tor client (an unmaintained proc-macro, and a timing
-  side channel in RSA private-key operations that this client does not perform because it holds no RSA private key).
+  analytics, telemetry and update-check crates by name, which is not a review of the Tor code. `deny.toml` ignores five
+  advisories, each with its reason, all reached only through the Tor client: an unmaintained proc-macro; a timing side
+  channel in RSA private-key operations that this client does not perform because it holds no RSA private key; and three
+  advisories in the zstd library that decompresses directory documents, whose affected functions (context reuse, the
+  seekable format, legacy frames) this build does not call or does not compile in (the fixed zstd 0.14.3 and zstd-safe
+  8.2.0 cannot be taken by the locked compression-codecs 0.4.38).
 - **The library links the whole network stack.** A program that depends on `zcrowd-core` also links the lightwalletd client,
   the Tor client and SQLite, although the scoring modules use none of them (section 7).
 

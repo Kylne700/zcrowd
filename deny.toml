@@ -7,6 +7,9 @@ yanked = "deny"
 ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (no vulnerability). It is a proc-macro, so it runs at build time and adds no code to the binary; it is reached only through arti (pwd-grp, fs-mistrust). Revisit when arti or zcash_client_backend update." },
   { id = "RUSTSEC-2023-0071", reason = "rsa: timing side channel (Marvin) in RSA private-key operations, no fixed release. Reached only through arti (tor-llcrypto, tor-key-forge). The lockfile has no tor-hsservice or relay crate and tor-proto is built without its relay feature, so this client only verifies relays' RSA identity signatures with public keys and holds no RSA private key. Revisit when arti updates." },
+  { id = "RUSTSEC-2026-0391", reason = "zstd 0.13.3: with_context constructors reuse a borrowed context. Reached only through arti (async-compression, compression-codecs), which builds its decoder with Decoder::new and never calls with_context. Fixed in zstd 0.14.3, which compression-codecs 0.4.x (zstd ^0.13) cannot take; re-check when arti moves." },
+  { id = "RUSTSEC-2026-0398", reason = "zstd-safe 7.3.0: Seekable::decompress needs the seekable feature, which is off in this lockfile (zstd-safe features = std only). Fixed in zstd-safe 8.2.0, which compression-codecs 0.4.x (zstd-safe ^7) cannot take." },
+  { id = "RUSTSEC-2026-0403", reason = "zstd-safe 7.3.0: legacy (zstd v0.4 to v0.7) frame decoding error leaves uninitialized memory in the output. The legacy feature is off in this lockfile (zstd-sys features = std only, so ZSTD_LEGACY_SUPPORT is OFF and legacy frames are refused). Fixed in zstd-safe 8.2.0, which compression-codecs 0.4.x cannot take." },
 ]
 
 [licenses]

@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/Kylne700/zcrowd/actions/workflows/ci.yml/badge.svg)](https://github.com/Kylne700/zcrowd/actions/workflows/ci.yml)
 
-**Try it:** the [live demo](https://kylne700.github.io/zcrowd/) (the one-file web page of section 13; GitHub sees your visit, never the amount) or the [demo video](https://youtu.be/ZAxaw6B81Ug).
+**Try it:** the [live demo](https://kylne700.github.io/zcrowd/) (the one-file web page of section 13; GitHub sees your visit, never the amount) or the [demo video](https://youtu.be/FxhJz2B68fA).
 
 ![The zcrowd web page opened from a local file: the box with the report's figures first, then, after the amount 3.73 was typed for an unshield, the verdict RED (one earlier shield of about that amount, in Sapling), the three pool lines, the notes and the first matching entry.](docs/screenshot.png)
 
